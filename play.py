@@ -33,7 +33,7 @@ import aiofiles
 
 from config import *
 
-# ── Configuration ────────────────────────────────────────────────────────────
+# ── Configuration ───────────────────────────────────────────────────────────
 BOT_TOKEN = TOKEN
 API_ID = APIID
 API_HASH = APIHASH
@@ -45,7 +45,7 @@ ADD_AUDIO_STATE = 11
 EDIT_DELAY_STATE = 12
 EDIT_BREAK_STATE = 13
 
-# ── Logging ─────────────────────────────────────────────────────────────────
+# ── Logging ─────────────────────────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(message)s",
@@ -56,7 +56,7 @@ logging.basicConfig(
 )
 log = logging.getLogger("VCBot")
 
-# ── Enums ─────────────────────────────────────────────────────────────────
+# ── Enums ─────────────────────────────────────────────────────────────
 class AccountStatus(Enum):
     IDLE = "💤 Idle"
     IN_VC = "🎙 In Voice Chat"
@@ -484,7 +484,7 @@ class AudioFileManager:
         file_size = os.path.getsize(filepath)
         return max(5.0, file_size / 32000)
 
-# ── Bot UI ─────────────────────────────────────────────────────────────────
+# ── Bot UI ─────────────────────────────────────────────────────────────
 class BotUI:
     @staticmethod
     def main_menu(has_account=False):
@@ -616,7 +616,6 @@ class BotHandlers:
                 "Type /cancel to cancel.",
                 parse_mode="Markdown"
             )
-            return PHONE_STATE
         
         elif data == "remove_account":
             await account_manager.remove_account()
@@ -641,7 +640,6 @@ class BotHandlers:
                 "Type /cancel to cancel.",
                 parse_mode="Markdown"
             )
-            return ADD_CHANNEL_STATE
         
         elif data == "add_audio":
             await query.edit_message_text(
@@ -652,7 +650,6 @@ class BotHandlers:
                 "Type /cancel to cancel.",
                 parse_mode="Markdown"
             )
-            return ADD_AUDIO_STATE
         
         elif data == "start_playback":
             if account_manager.vc_state:
@@ -689,7 +686,6 @@ class BotHandlers:
                 f"Type /cancel to cancel.",
                 parse_mode="Markdown"
             )
-            return EDIT_DELAY_STATE
         
         elif data == "edit_break":
             await query.edit_message_text(
@@ -699,7 +695,6 @@ class BotHandlers:
                 f"Type /cancel to cancel.",
                 parse_mode="Markdown"
             )
-            return EDIT_BREAK_STATE
         
         elif data == "toggle_loop":
             settings = state_manager.get_settings()
@@ -799,7 +794,7 @@ class BotHandlers:
             ])
         )
     
-    # ── Login Handlers (FIXED) ─────────────────────────────────────────────
+    # ── Login Handlers ─────────────────────────────────────────────
     async def login_phone(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         phone = update.message.text.strip()
         user_id = update.effective_user.id
@@ -1143,7 +1138,7 @@ class BotHandlers:
         )
         return ConversationHandler.END
 
-# ── Main ───────────────────────────────────────────────────────────────────
+# ── Main ──────────────────────────────────────────────────────────────
 async def load_saved_session():
     """Load saved session on startup"""
     account_data = state_manager.get_account()
@@ -1202,11 +1197,10 @@ def main():
     app.add_handler(CommandHandler("start", handlers.start))
     app.add_handler(CommandHandler("cancel", handlers.cancel))
     app.add_handler(CommandHandler("done", handlers.add_audio))
-    app.add_handler(CallbackQueryHandler(handlers.callback))
     
-    # Login conversation
+    # Login conversation - FIXED: No lambda, clean pattern matching
     login_conv = ConversationHandler(
-        entry_points=[CallbackQueryHandler(lambda u,c: u.callback_query.data == "add_account", pattern="^add_account$")],
+        entry_points=[CallbackQueryHandler(handlers.callback, pattern="^add_account$")],
         states={
             PHONE_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.login_phone)],
             CODE_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.login_code)],
@@ -1219,7 +1213,7 @@ def main():
     
     # Add channel conversation
     channel_conv = ConversationHandler(
-        entry_points=[CallbackQueryHandler(lambda u,c: u.callback_query.data == "add_channel", pattern="^add_channel$")],
+        entry_points=[CallbackQueryHandler(handlers.callback, pattern="^add_channel$")],
         states={ADD_CHANNEL_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.add_channel)]},
         fallbacks=[CommandHandler("cancel", handlers.cancel)],
         allow_reentry=True,
@@ -1228,7 +1222,7 @@ def main():
     
     # Add audio conversation
     audio_conv = ConversationHandler(
-        entry_points=[CallbackQueryHandler(lambda u,c: u.callback_query.data == "add_audio", pattern="^add_audio$")],
+        entry_points=[CallbackQueryHandler(handlers.callback, pattern="^add_audio$")],
         states={ADD_AUDIO_STATE: [MessageHandler(filters.AUDIO | filters.VOICE, handlers.add_audio)]},
         fallbacks=[CommandHandler("cancel", handlers.cancel), CommandHandler("done", handlers.add_audio)],
         allow_reentry=True,
@@ -1237,7 +1231,7 @@ def main():
     
     # Edit delay conversation
     delay_conv = ConversationHandler(
-        entry_points=[CallbackQueryHandler(lambda u,c: u.callback_query.data == "edit_delay", pattern="^edit_delay$")],
+        entry_points=[CallbackQueryHandler(handlers.callback, pattern="^edit_delay$")],
         states={EDIT_DELAY_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.edit_delay)]},
         fallbacks=[CommandHandler("cancel", handlers.cancel)],
         allow_reentry=True,
@@ -1246,12 +1240,15 @@ def main():
     
     # Edit break conversation
     break_conv = ConversationHandler(
-        entry_points=[CallbackQueryHandler(lambda u,c: u.callback_query.data == "edit_break", pattern="^edit_break$")],
+        entry_points=[CallbackQueryHandler(handlers.callback, pattern="^edit_break$")],
         states={EDIT_BREAK_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.edit_break)]},
         fallbacks=[CommandHandler("cancel", handlers.cancel)],
         allow_reentry=True,
     )
     app.add_handler(break_conv)
+    
+    # IMPORTANT: Generic callback handler MUST be LAST
+    app.add_handler(CallbackQueryHandler(handlers.callback))
     
     log.info("🚀 Bot started successfully!")
     app.run_polling(drop_pending_updates=True)
