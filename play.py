@@ -1,21 +1,21 @@
 """
-Voice Chat Audio Player Bot — Simple single user
+VC Streaming Platform — Advanced Admin + Multi-Client Bot
 """
 
 import asyncio
 import json
 import logging
 import os
-import re
 import random
+import re
 import subprocess
 import sys
-import threading
 import time
+from datetime import datetime
 from typing import Dict, Optional
 
 import ntgcalls
-from pyrogram import Client
+from pyrogram import Client as PyroClient
 from pyrogram.enums import ChatType
 from pyrogram.errors import FloodWait
 from pyrogram.raw import functions, types as raw_types
@@ -25,83 +25,182 @@ from telegram.ext import (
     CommandHandler, ContextTypes, MessageHandler, filters,
 )
 
-from config import TOKEN, APIID, APIHASH
+from config import TOKEN as ADMIN_TOKEN, APIID, APIHASH, ADMIN_ID
 
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(message)s",
-    handlers=[logging.FileHandler("bot.log"), logging.StreamHandler()],
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+    handlers=[logging.FileHandler("platform.log"), logging.StreamHandler()],
 )
-log = logging.getLogger("VCBot")
+log = logging.getLogger("VCPlatform")
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("pyrogram").setLevel(logging.WARNING)
 
-SESSION_DIR      = "sessions"
-DATA_FILE        = "bot_data.json"
-AUDIO_DIR        = "audio_files"
-MONITOR_INTERVAL = 15
-
-# ── Playlist / PCM constants ───────────────────────────────────────────────────
-SAMPLE_RATE  = 48000
-CHANNELS     = 2
-BYTES_SEC    = SAMPLE_RATE * CHANNELS * 2   # s16le = 2 bytes/sample
-PCM_CHUNK    = BYTES_SEC                    # 1-second chunks
+H = "HTML"
+DATA_FILE   = "platform_data.json"
+SESSION_DIR = "sessions"
+AUDIO_DIR   = "audio_files"
+SAMPLE_RATE = 48000
+CHANNELS    = 2
+BYTES_SEC   = SAMPLE_RATE * CHANNELS * 2
+PCM_CHUNK   = BYTES_SEC
+MONITOR_INT = 15
 
 os.makedirs(SESSION_DIR, exist_ok=True)
-os.makedirs(AUDIO_DIR,   exist_ok=True)
+os.makedirs(AUDIO_DIR, exist_ok=True)
 
-# ── Playlist streaming (embedded, no external file needed) ─────────────────────
-def _pcm_stream_file(path: str, out):
-    proc = subprocess.Popen(
-        ["ffmpeg", "-i", path, "-f", "s16le", "-acodec", "pcm_s16le",
-         "-ar", str(SAMPLE_RATE), "-ac", str(CHANNELS), "pipe:1", "-loglevel", "quiet"],
-        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-    )
-    try:
-        while True:
-            chunk = proc.stdout.read(PCM_CHUNK)
-            if not chunk:
-                break
-            out.write(chunk)
-            out.flush()
-    finally:
-        try: proc.kill()
-        except Exception: pass
-        proc.wait()
 
-def _pcm_silence(seconds: float, out):
-    total = int(BYTES_SEC * seconds)
-    silence = bytes(PCM_CHUNK)
-    written = 0
-    while written < total:
-        n = min(PCM_CHUNK, total - written)
-        out.write(silence[:n])
-        out.flush()
-        written += n
+# ─────────────────────────────────────────────────────────────
+# PREMIUM EMOJIS
+# ─────────────────────────────────────────────────────────────
 
-def playlist_loop(files: list, delay: float, break_t: float, out):
-    while True:
-        valid = [f for f in files if os.path.isfile(f)]
-        if not valid:
-            _pcm_silence(5, out)
-            continue
-        for i, f in enumerate(valid):
-            _pcm_stream_file(f, out)
-            if i < len(valid) - 1 and delay > 0:
-                _pcm_silence(delay, out)
-        if break_t > 0:
-            _pcm_silence(break_t, out)
+def e(emoji_id: str, fallback: str) -> str:
+    return f'<tg-emoji emoji-id="{emoji_id}">{fallback}</tg-emoji>'
 
-def build_combined_pcm(files: list, delay_sec: float, break_sec: float, out_path: str):
-    """Pre-render full playlist + delays + break into one regular PCM file on disk."""
+
+EM = {
+    "crown":   e("5361541667912015104", "👑"),
+    "star":    e("5368324170671202286", "⭐"),
+    "fire":    e("5451646226975955296", "🔥"),
+    "diamond": e("5471952986970267163", "💎"),
+    "check":   e("5368324170671202288", "✅"),
+    "cross":   e("5465665476971471368", "❌"),
+    "music":   e("5373026167722876724", "🎵"),
+    "mic":     e("5373026167722876725", "🎙"),
+    "phone":   e("5373026167722876726", "📱"),
+    "channel": e("5373026167722876727", "📢"),
+    "cal":     e("5373026167722876728", "📅"),
+    "clock":   e("5373026167722876729", "⏰"),
+    "warn":    e("5373026167722876730", "⚠️"),
+    "green":   e("5373026167722876731", "🟢"),
+    "red":     e("5373026167722876732", "🔴"),
+    "yellow":  e("5373026167722876733", "🟡"),
+    "lock":    e("5373026167722876734", "🔒"),
+    "rocket":  e("5373026167722876735", "🚀"),
+    "trophy":  e("5373026167722876736", "🏆"),
+    "bell":    e("5373026167722876737", "🔔"),
+    "shield":  e("5373026167722876738", "🛡"),
+    "gift":    e("5373026167722876739", "🎁"),
+    "chart":   e("5373026167722876740", "📊"),
+    "zap":     e("5373026167722876741", "⚡"),
+    "person":  e("5373026167722876742", "👤"),
+    "bot":     e("5373026167722876743", "🤖"),
+    "list":    e("5373026167722876744", "📋"),
+    "settings":e("5373026167722876745", "⚙️"),
+    "link":    e("5373026167722876746", "🔗"),
+    "stop":    e("5373026167722876747", "⏹"),
+    "play":    e("5373026167722876748", "▶️"),
+    "refresh": e("5373026167722876749", "🔄"),
+    "live":    e("5373026167722876750", "📡"),
+}
+
+
+# ─────────────────────────────────────────────────────────────
+# SUBSCRIPTION PLANS
+# ─────────────────────────────────────────────────────────────
+
+PLANS = {
+    "basic": {
+        "name": "Basic",
+        "emoji": EM["star"],
+        "price": "₹2,000",
+        "channels": 1,
+        "audio": 2,
+        "desc": "1 Account • 1 Channel • 2 Audio Files",
+    },
+    "pro": {
+        "name": "Pro",
+        "emoji": EM["diamond"],
+        "price": "Custom",
+        "channels": 3,
+        "audio": None,
+        "desc": "1 Account • 3 Channels • Unlimited Audio",
+    },
+}
+
+
+def plan_limits(plan: str):
+    return PLANS.get(plan, PLANS["basic"])
+
+
+# ─────────────────────────────────────────────────────────────
+# STATES
+# ─────────────────────────────────────────────────────────────
+
+SA_USERID   = 10
+SA_TOKEN    = 11
+SA_PLAN     = 12
+SA_DAYS     = 13
+SA_EXT_UID  = 14
+SA_EXT_DAYS = 15
+
+SC_PHONE    = 20
+SC_OTP      = 21
+SC_PASS     = 22
+SC_CHANNEL  = 23
+SC_AUDIO    = 24
+SC_DELAY    = 25
+SC_BREAK    = 26
+
+
+# ─────────────────────────────────────────────────────────────
+# DATA HELPERS
+# ─────────────────────────────────────────────────────────────
+
+def load_data() -> dict:
+    if os.path.exists(DATA_FILE):
+        try:
+            with open(DATA_FILE) as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {"users": {}}
+
+
+def save_data(data: dict):
+    with open(DATA_FILE, "w") as f:
+        json.dump(data, f, indent=2)
+
+
+def get_user(uid: str) -> dict:
+    return load_data()["users"].get(uid, {})
+
+
+def save_user(uid: str, udata: dict):
+    data = load_data()
+    data["users"][uid] = udata
+    save_data(data)
+
+
+def days_left(udata: dict) -> int:
+    rem = udata.get("subscribed_until", 0) - time.time()
+    return max(0, int(rem / 86400))
+
+
+def is_active(udata: dict) -> bool:
+    return time.time() < udata.get("subscribed_until", 0)
+
+
+def fmt_date(ts: float) -> str:
+    return datetime.fromtimestamp(ts).strftime("%d %b %Y")
+
+
+def fmt_datetime(ts: float) -> str:
+    return datetime.fromtimestamp(ts).strftime("%d %b %Y, %I:%M %p")
+
+
+# ─────────────────────────────────────────────────────────────
+# PCM HELPER
+# ─────────────────────────────────────────────────────────────
+
+def build_combined_pcm(files, delay_sec, break_sec, out_path):
     valid = [f for f in files if os.path.isfile(f)]
     with open(out_path, "wb") as out:
         for i, f in enumerate(valid):
             proc = subprocess.Popen(
                 ["ffmpeg", "-i", f, "-f", "s16le", "-acodec", "pcm_s16le",
                  "-ar", str(SAMPLE_RATE), "-ac", str(CHANNELS), "pipe:1", "-loglevel", "quiet"],
-                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-            )
+                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
             try:
                 while True:
                     chunk = proc.stdout.read(PCM_CHUNK)
@@ -116,142 +215,100 @@ def build_combined_pcm(files: list, delay_sec: float, break_sec: float, out_path
         if break_sec > 0:
             out.write(bytes(int(BYTES_SEC * break_sec)))
 
-S_PHONE = 1; S_CODE = 2; S_PASS = 3
-S_ADD_AUDIO = 4; S_SET_DELAY = 5; S_SET_BREAK = 6; S_ADD_CHANNEL = 7
 
-H = "HTML"
-
-def load_data() -> dict:
-    if os.path.exists(DATA_FILE):
-        try:
-            with open(DATA_FILE) as f:
-                return json.load(f)
-        except Exception:
-            pass
-    return {"phone": None, "channels": [], "playlist": [], "delay": 30, "break_time": 300}
-
-def save_data(data: dict):
-    with open(DATA_FILE, "w") as f:
-        json.dump(data, f, indent=2)
-
-def kb_main():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("👤 Account",  callback_data="m:account"),
-         InlineKeyboardButton("📢 Channels", callback_data="m:channels")],
-        [InlineKeyboardButton("🎵 Playlist", callback_data="m:playlist"),
-         InlineKeyboardButton("⚙️ Settings", callback_data="m:settings")],
-        [InlineKeyboardButton("📊 Status",   callback_data="m:status")],
-    ])
-
-def kb_account(logged_in):
-    btns = []
-    if logged_in:
-        btns.append([InlineKeyboardButton("🚪 Logout", callback_data="a:logout")])
-    else:
-        btns.append([InlineKeyboardButton("🔑 Login",  callback_data="a:login")])
-    btns.append([InlineKeyboardButton("🔙 Back", callback_data="m:main")])
-    return InlineKeyboardMarkup(btns)
-
-def kb_channels(channels):
-    btns = []
-    for i, ch in enumerate(channels):
-        name = ch.replace("https://t.me/", "@")
-        btns.append([InlineKeyboardButton(f"❌ {name}", callback_data=f"ch:remove:{i}")])
-    btns.append([InlineKeyboardButton("➕ Add Channel", callback_data="ch:add")])
-    btns.append([InlineKeyboardButton("🔙 Back",        callback_data="m:main")])
-    return InlineKeyboardMarkup(btns)
-
-def kb_playlist(playlist):
-    btns = []
-    for i, item in enumerate(playlist):
-        name = item.get("name", f"Track {i+1}")
-        btns.append([InlineKeyboardButton(f"❌ {i+1}. {name}", callback_data=f"pl:remove:{i}")])
-    btns.append([InlineKeyboardButton("➕ Add Audio", callback_data="pl:add"),
-                 InlineKeyboardButton("🗑 Clear All",  callback_data="pl:clear")])
-    btns.append([InlineKeyboardButton("⏱ Set Delay",  callback_data="pl:delay"),
-                 InlineKeyboardButton("☕ Set Break",  callback_data="pl:break")])
-    btns.append([InlineKeyboardButton("🔙 Back", callback_data="m:main")])
-    return InlineKeyboardMarkup(btns)
+# ─────────────────────────────────────────────────────────────
+# VC SESSION
+# ─────────────────────────────────────────────────────────────
 
 class VCSession:
-    def __init__(self):
-        self.pyro = None; self.nt = None
-        self.active_chat_id = None; self.active_call = None; self.active_link = None
+    def __init__(self, uid: str):
+        self.uid = uid
+        self.pyro: Optional[PyroClient] = None
+        self.nt = None
+        self.active_chat_id = None
+        self.active_call = None
+        self.active_link: Optional[str] = None
         self.monitor_tasks: Dict[str, asyncio.Task] = {}
         self.keepalive_task = None
-        self.combined_pcm = None
+        self.combined_pcm: Optional[str] = None
         self.loop = None
 
-    def _on_stream_end(self, *args):
-        try:
-            chat_id = args[0] if args else self.active_chat_id
-            if chat_id != self.active_chat_id: return
-            if not self.combined_pcm or not os.path.isfile(self.combined_pcm): return
-            if not self.nt or not self.loop: return
-            log.info(f"Stream ended in {chat_id} — looping playlist")
-            media = ntgcalls.MediaDescription(
-                microphone=ntgcalls.AudioDescription(
-                    ntgcalls.MediaSource.FILE, SAMPLE_RATE, CHANNELS, self.combined_pcm
-                )
-            )
-            asyncio.run_coroutine_threadsafe(
-                self.nt.set_stream_sources(chat_id, ntgcalls.StreamMode.CAPTURE, media),
-                self.loop,
-            )
-        except Exception as e:
-            log.warning(f"_on_stream_end: {e}")
+    def is_in_vc(self) -> bool:
+        return self.active_chat_id is not None
 
     def get_nt(self):
         if self.nt is None:
             self.nt = ntgcalls.NTgCalls()
-            self.nt.on_connection_change(lambda cid, info: log.info(f"NTG {cid}: {getattr(info,'state',info)}"))
+            self.nt.on_connection_change(
+                lambda cid, info: log.info(f"[{self.uid}] NTG: {getattr(info,'state',info)}"))
             try: self.nt.on_stream_end(self._on_stream_end)
-            except Exception as e: log.warning(f"on_stream_end not available: {e}")
+            except Exception: pass
         return self.nt
 
-    async def safe_name(self):
+    def _on_stream_end(self, *args):
         try:
-            if self.pyro and self.pyro.me:
-                return self.pyro.me.first_name or "?"
-        except Exception:
-            pass
-        return "?"
+            chat_id = args[0] if args else self.active_chat_id
+            if chat_id != self.active_chat_id or not self.combined_pcm: return
+            if not self.nt or not self.loop: return
+            media = ntgcalls.MediaDescription(
+                microphone=ntgcalls.AudioDescription(
+                    ntgcalls.MediaSource.FILE, SAMPLE_RATE, CHANNELS, self.combined_pcm))
+            async def _restart():
+                for method in ("change_stream", "set_stream_sources", "edit_call"):
+                    fn = getattr(self.nt, method, None)
+                    if not fn: continue
+                    try:
+                        if method == "set_stream_sources":
+                            await fn(chat_id, ntgcalls.StreamMode.CAPTURE, media)
+                        else:
+                            await fn(chat_id, media)
+                        return
+                    except Exception: pass
+            asyncio.run_coroutine_threadsafe(_restart(), self.loop)
+        except Exception: pass
 
-    def is_in_vc(self):
-        return self.active_chat_id is not None
 
-sess = VCSession()
+# ─────────────────────────────────────────────────────────────
+# GLOBAL STATE
+# ─────────────────────────────────────────────────────────────
 
-def make_pyro(phone):
-    return Client(phone, api_id=APIID, api_hash=APIHASH, workdir=SESSION_DIR)
+vc_sessions: Dict[str, VCSession] = {}
+client_bots: Dict[str, Application] = {}
+bot_info_cache: Dict[str, dict] = {}   # uid -> {"username": ..., "first_name": ...}
+admin_app_ref: Optional[Application] = None
 
-async def check_vc(client, chat_link):
+
+def get_vc_sess(uid: str) -> VCSession:
+    if uid not in vc_sessions:
+        vc_sessions[uid] = VCSession(uid)
+    return vc_sessions[uid]
+
+
+# ─────────────────────────────────────────────────────────────
+# VC CORE
+# ─────────────────────────────────────────────────────────────
+
+async def check_vc(client, chat_link: str):
     try:
-        m = re.search(r"t\.me/(\w+)", chat_link)
-        if not m: return None, None
-        chat = await client.get_chat(m.group(1))
+        link = chat_link.strip()
+        m = re.search(r"t\.me/(\w+)", link)
+        target = link if ("/+" in link or "/joinchat/" in link) else (m.group(1) if m else None)
+        if not target: return None, None, True
+        chat = await client.get_chat(target)
         if chat.type not in (ChatType.SUPERGROUP, ChatType.CHANNEL, ChatType.GROUP):
-            return None, None
+            return None, None, True
         if chat.type in (ChatType.SUPERGROUP, ChatType.CHANNEL):
-            full = await client.invoke(functions.channels.GetFullChannel(channel=await client.resolve_peer(chat.id)))
+            full = await client.invoke(
+                functions.channels.GetFullChannel(channel=await client.resolve_peer(chat.id)))
         else:
             full = await client.invoke(functions.messages.GetFullChat(chat_id=chat.id))
         call_inp = getattr(full.full_chat, "call", None)
-        if not call_inp: return chat, None
-        try:
-            res = await client.invoke(functions.phone.GetGroupCall(call=call_inp, limit=0))
-            if getattr(res.call, "rtmp_stream", False):
-                log.info(f"RTMP in {chat_link} — skipping")
-                return chat, None
-        except Exception:
-            pass
-        return chat, call_inp
-    except ValueError as e:
-        if "Peer id invalid" not in str(e): log.warning(f"check_vc: {e}")
-        return None, None
+        return chat, call_inp, True
+    except FloodWait as fw:
+        await asyncio.sleep(min(fw.value, 30)); return None, None, False
     except Exception as e:
-        log.warning(f"check_vc [{chat_link}]: {e}")
-        return None, None
+        log.warning(f"check_vc [{chat_link}]: {e}"); return None, None, True
+
 
 def extract_transport(updates):
     try:
@@ -260,32 +317,30 @@ def extract_transport(updates):
                 return upd.params.data
         if hasattr(updates, "params") and hasattr(updates.params, "data"):
             return updates.params.data
-    except Exception:
-        pass
+    except Exception: pass
     return None
 
-async def vc_join(chat, call_inp, data):
-    files = [p["path"] for p in data.get("playlist", []) if os.path.isfile(p["path"])]
-    if not files:
-        log.warning("No audio files — skipping join")
-        return False
+
+async def vc_join(sess: VCSession, chat, call_inp, uid: str) -> bool:
+    udata = get_user(uid)
+    files = [p["path"] for p in udata.get("playlist", []) if os.path.isfile(p["path"])]
+    if not files: return False
     nt = sess.get_nt()
     sess.loop = asyncio.get_event_loop()
     chat_id = chat.id
-    delay = data.get("delay", 30)
-    break_t = data.get("break_time", 300)
     try:
-        # Pre-build full playlist as a single PCM file on disk (regular file works reliably)
-        combined_pcm = f"/tmp/vcbot_playlist_{abs(chat_id)}.pcm"
-        log.info(f"Building combined PCM ({len(files)} track(s), delay={delay}s, break={break_t}s)...")
+        pcm_path = f"/tmp/vcbot_{uid}_{abs(chat_id)}.pcm"
         await sess.loop.run_in_executor(
-            None, build_combined_pcm, files, delay, break_t, combined_pcm
-        )
-        size_mb = os.path.getsize(combined_pcm) / (1024 * 1024)
-        dur_s = os.path.getsize(combined_pcm) / BYTES_SEC
-        log.info(f"PCM ready: {size_mb:.1f} MB, ~{dur_s:.0f}s")
-
-        params_json = await nt.create_call(chat_id)
+            None, build_combined_pcm, files,
+            udata.get("delay", 30), udata.get("break_time", 300), pcm_path)
+        sess.combined_pcm = pcm_path
+        media = ntgcalls.MediaDescription(
+            microphone=ntgcalls.AudioDescription(
+                ntgcalls.MediaSource.FILE, SAMPLE_RATE, CHANNELS, pcm_path))
+        try:
+            params_json = await nt.create_call(chat_id, media); need_set = False
+        except TypeError:
+            params_json = await nt.create_call(chat_id); need_set = True
         result = None
         for _ in range(3):
             try:
@@ -293,41 +348,29 @@ async def vc_join(chat, call_inp, data):
                     functions.phone.JoinGroupCall(
                         call=call_inp, join_as=raw_types.InputPeerSelf(),
                         muted=False, video_stopped=True,
-                        params=raw_types.DataJSON(data=params_json),
-                    )
-                )
+                        params=raw_types.DataJSON(data=params_json)))
                 break
             except FloodWait as fw:
                 await asyncio.sleep(fw.value + 2)
-        if result is None: return False
+        if not result: return False
         transport = extract_transport(result)
-        if not transport:
-            log.error("No transport received")
-            return False
+        if not transport: return False
         await nt.connect(chat_id, transport, False)
-
-        sess.combined_pcm = combined_pcm
-        media = ntgcalls.MediaDescription(
-            microphone=ntgcalls.AudioDescription(
-                ntgcalls.MediaSource.FILE, SAMPLE_RATE, CHANNELS, combined_pcm
-            )
-        )
-        await nt.set_stream_sources(chat_id, ntgcalls.StreamMode.CAPTURE, media)
-        log.info("Audio: streaming PCM file (will loop on stream end)")
-
+        if need_set:
+            await nt.set_stream_sources(chat_id, ntgcalls.StreamMode.CAPTURE, media)
         await nt.unmute(chat_id)
         sess.active_chat_id = chat_id
         sess.active_call = call_inp
-        log.info(f"Joined VC in {chat.title}!")
         return True
     except Exception as e:
-        log.error(f"vc_join error: {e}")
+        log.error(f"[{uid}] vc_join: {e}")
         try: await nt.stop(chat_id)
         except Exception: pass
         return False
 
-async def vc_leave():
-    if sess.active_chat_id is None: return
+
+async def vc_leave(sess: VCSession):
+    if not sess.active_chat_id: return
     chat_id = sess.active_chat_id
     if sess.nt:
         try: await sess.nt.stop(chat_id)
@@ -339,10 +382,41 @@ async def vc_leave():
         try: os.remove(sess.combined_pcm)
         except Exception: pass
     sess.combined_pcm = None
-    sess.active_chat_id = None; sess.active_call = None; sess.active_link = None
-    log.info("Left VC")
+    sess.active_chat_id = None
+    sess.active_call = None
+    sess.active_link = None
 
-async def keepalive_loop():
+
+async def create_live_in(sess: VCSession, link: str) -> str:
+    if not sess.pyro: return f"{EM['cross']} Account not logged in"
+    chat, _, _ = await check_vc(sess.pyro, link)
+    if not chat: return f"{EM['cross']} Channel resolve nahi hua"
+    try:
+        peer = await sess.pyro.resolve_peer(chat.id)
+        await sess.pyro.invoke(
+            functions.phone.CreateGroupCall(peer=peer, random_id=random.randint(1, 2**31 - 1)))
+        return f"{EM['check']} Live started in <b>{chat.title}</b>"
+    except Exception as e:
+        msg = str(e)
+        if "ALREADY" in msg: return f"{EM['zap']} Live already running in <b>{chat.title}</b>"
+        if "ADMIN_REQUIRED" in msg: return f"{EM['cross']} Account ko Manage Calls admin permission chahiye"
+        return f"{EM['cross']} Failed: <code>{msg}</code>"
+
+
+async def end_live_in(sess: VCSession, link: str) -> str:
+    if not sess.pyro: return f"{EM['cross']} Account not logged in"
+    chat, call_inp, _ = await check_vc(sess.pyro, link)
+    if not chat: return f"{EM['cross']} Channel resolve nahi hua"
+    if not call_inp: return f"{EM['warn']} Koi live nahi chal raha"
+    try:
+        if sess.active_chat_id == chat.id: await vc_leave(sess)
+        await sess.pyro.invoke(functions.phone.DiscardGroupCall(call=call_inp))
+        return f"{EM['check']} Live stopped in <b>{chat.title}</b>"
+    except Exception as e:
+        return f"{EM['cross']} Failed: <code>{str(e)}</code>"
+
+
+async def keepalive_loop(sess: VCSession):
     while True:
         await asyncio.sleep(20)
         if not sess.pyro: continue
@@ -351,320 +425,1616 @@ async def keepalive_loop():
             else: await sess.pyro.invoke(functions.Ping(ping_id=random.randint(1, 999999)))
         except Exception: pass
 
-def start_keepalive():
-    if sess.keepalive_task and not sess.keepalive_task.done(): return
-    sess.keepalive_task = asyncio.create_task(keepalive_loop())
 
-async def monitor_channel(chat_link):
-    log.info(f"Monitoring: {chat_link}")
+async def monitor_channel(sess: VCSession, uid: str, link: str):
     was_active = False
+    interval = MONITOR_INT
     while True:
         try:
-            if not sess.pyro or not sess.pyro.is_connected:
-                await asyncio.sleep(MONITOR_INTERVAL); continue
-            data = load_data()
-            chat, call = await check_vc(sess.pyro, chat_link)
+            if not sess.pyro: await asyncio.sleep(interval); continue
+            udata = get_user(uid)
+            if not is_active(udata):
+                await vc_leave(sess); return
+            chat, call, fatal = await check_vc(sess.pyro, link)
+            if not fatal: interval = 60; await asyncio.sleep(interval); continue
+            interval = MONITOR_INT
             if chat and call and not was_active:
-                log.info(f"Live detected: {chat_link}")
-                ok = await vc_join(chat, call, data)
-                if ok: sess.active_link = chat_link; was_active = True
+                ok = await vc_join(sess, chat, call, uid)
+                if ok: sess.active_link = link; was_active = True
             elif not call and was_active:
-                log.info(f"Live ended: {chat_link}")
-                await vc_leave(); was_active = False
+                await vc_leave(sess); was_active = False
         except asyncio.CancelledError:
-            await vc_leave(); return
+            await vc_leave(sess); return
         except Exception as e:
-            log.warning(f"Monitor [{chat_link}]: {e}")
-        await asyncio.sleep(MONITOR_INTERVAL)
+            log.warning(f"[{uid}] Monitor [{link}]: {e}")
+        await asyncio.sleep(interval)
 
-def start_monitors(channels):
+
+def start_monitors(sess: VCSession, uid: str, channels: list):
     for link in channels:
         if link not in sess.monitor_tasks or sess.monitor_tasks[link].done():
-            sess.monitor_tasks[link] = asyncio.create_task(monitor_channel(link))
+            sess.monitor_tasks[link] = asyncio.create_task(monitor_channel(sess, uid, link))
 
-def stop_all_monitors():
+
+def stop_monitors(sess: VCSession):
     for t in sess.monitor_tasks.values(): t.cancel()
     sess.monitor_tasks.clear()
 
-async def start_pyro_session(phone):
+
+async def start_pyro_session(sess: VCSession, uid: str) -> bool:
+    udata = get_user(uid)
+    phone = udata.get("account_phone")
+    if not phone: return False
     sf = os.path.join(SESSION_DIR, f"{phone}.session")
     if not os.path.exists(sf): return False
-    c = make_pyro(phone)
+    c = PyroClient(phone, api_id=APIID, api_hash=APIHASH, workdir=SESSION_DIR)
     try:
         await c.start()
         if c.me is None: await c.get_me()
-        sess.pyro = c; sess.get_nt(); start_keepalive()
-        start_monitors(load_data().get("channels", []))
-        log.info(f"Pyrogram ready: {phone}")
+        sess.pyro = c; sess.get_nt()
+        sess.keepalive_task = asyncio.create_task(keepalive_loop(sess))
+        start_monitors(sess, uid, udata.get("channels", []))
         return True
     except Exception as e:
-        log.warning(f"Pyrogram start failed: {e}")
-        return False
+        log.warning(f"[{uid}] Pyro start: {e}"); return False
 
-def main_text(data):
-    phone = data.get("phone") or "Not logged in"
-    in_vc = "🟢 <b>In Live</b>" if sess.is_in_vc() else "🔴 Idle"
-    return (
-        "<blockquote>🎵 <b>VOICE CHAT BOT</b></blockquote>\n\n"
-        f"👤 Account : <code>{phone}</code>\n"
-        f"📡 Status  : {in_vc}"
-    )
 
-def playlist_text(data):
-    pl = data.get("playlist", [])
-    delay = data.get("delay", 30); break_ = data.get("break_time", 300)
-    lines = "\n".join(f"  <b>{i+1}.</b> {p['name']}" for i, p in enumerate(pl)) if pl else "<i>No audio yet. Use ➕ Add Audio.</i>"
-    return (
-        "<blockquote>🎵 <b>PLAYLIST</b></blockquote>\n\n"
-        f"{lines}\n\n"
-        f"⏱ Delay between tracks : <b>{delay}s</b>\n"
-        f"☕ Break after full loop : <b>{break_}s</b>"
-    )
-
-def channels_text(data):
-    chs = data.get("channels", [])
-    if not chs:
-        return "<blockquote>📢 <b>CHANNELS</b></blockquote>\n\n<i>No channels yet. Use ➕ Add Channel.</i>"
-    lines = "\n".join(f"  • <code>{c}</code>" for c in chs)
-    return f"<blockquote>📢 <b>CHANNELS</b></blockquote>\n\n{lines}"
-
-def status_text(data):
-    phone = data.get("phone") or "—"
-    link = sess.active_link or "—"
-    pl = data.get("playlist", []); chs = data.get("channels", [])
-    return (
-        "<blockquote>📊 <b>STATUS</b></blockquote>\n\n"
-        f"👤 Account  : <code>{phone}</code>\n"
-        f"🎙 In VC    : {'<b>Yes</b> — ' + link if sess.is_in_vc() else 'No'}\n"
-        f"🎵 Playlist : <b>{len(pl)}</b> track(s)\n"
-        f"📢 Channels : <b>{len(chs)}</b> monitored"
-    )
-
-async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(main_text(load_data()), parse_mode=H, reply_markup=kb_main())
-
-async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query; cb = q.data
-    await q.answer()
-    data = load_data()
-
-    if cb == "m:main":
-        await q.edit_message_text(main_text(data), parse_mode=H, reply_markup=kb_main())
-    elif cb == "m:account":
-        logged = bool(data.get("phone")) and sess.pyro is not None
-        txt = ("<blockquote>👤 <b>ACCOUNT</b></blockquote>\n\n" +
-               (f"✅ Logged in as <code>{data.get('phone','')}</code>" if logged
-                else "❌ Not logged in.\n\nClick <b>Login</b> to connect."))
-        await q.edit_message_text(txt, parse_mode=H, reply_markup=kb_account(logged))
-    elif cb == "m:channels":
-        await q.edit_message_text(channels_text(data), parse_mode=H, reply_markup=kb_channels(data.get("channels", [])))
-    elif cb == "m:playlist":
-        await q.edit_message_text(playlist_text(data), parse_mode=H, reply_markup=kb_playlist(data.get("playlist", [])))
-    elif cb == "m:settings":
-        await q.edit_message_text(
-            f"<blockquote>⚙️ <b>SETTINGS</b></blockquote>\n\n"
-            f"⏱ Delay : <b>{data.get('delay',30)}s</b>\n"
-            f"☕ Break : <b>{data.get('break_time',300)}s</b>\n\n"
-            "<i>Change from Playlist menu.</i>",
-            parse_mode=H, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="m:main")]]))
-    elif cb == "m:status":
+async def stop_client_bot(uid: str):
+    sess = vc_sessions.get(uid)
+    if sess:
+        stop_monitors(sess)
+        if sess.is_in_vc(): await vc_leave(sess)
+        if sess.keepalive_task: sess.keepalive_task.cancel()
+        if sess.pyro:
+            try: await sess.pyro.stop()
+            except Exception: pass
+            sess.pyro = None
+    app = client_bots.pop(uid, None)
+    if app:
         try:
-            await q.edit_message_text(status_text(data), parse_mode=H,
-                reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("🔄 Refresh", callback_data="m:status"),
-                    InlineKeyboardButton("🔙 Back", callback_data="m:main"),
-                ]]))
-        except Exception:
-            pass
-    elif cb == "a:login":
+            await app.updater.stop()
+            await app.stop()
+            await app.shutdown()
+        except Exception: pass
+    bot_info_cache.pop(uid, None)
+    log.info(f"[{uid}] Bot stopped")
+
+
+# ─────────────────────────────────────────────────────────────
+# STATUS HELPERS
+# ─────────────────────────────────────────────────────────────
+
+def user_status_icon(uid: str) -> str:
+    udata = get_user(uid)
+    if not is_active(udata): return EM["cross"]
+    sess = vc_sessions.get(uid)
+    if sess and sess.is_in_vc(): return EM["live"]
+    if sess and sess.pyro: return EM["green"]
+    return EM["yellow"]
+
+
+def bot_display_name(uid: str) -> str:
+    info = bot_info_cache.get(uid, {})
+    uname = info.get("username", "")
+    fname = info.get("first_name", f"User {uid}")
+    return f"@{uname}" if uname else fname
+
+
+# ─────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════
+#   ADMIN BOT — TEXTS & KEYBOARDS
+# ══════════════════════════════════════════════════════════════
+# ─────────────────────────────────────────────────────────────
+
+def adm_home_text() -> str:
+    data = load_data()
+    users = data.get("users", {})
+    total  = len(users)
+    active = sum(1 for u in users.values() if is_active(u))
+    online = sum(1 for uid in users if vc_sessions.get(uid) and vc_sessions[uid].pyro)
+    live   = sum(1 for uid in users if vc_sessions.get(uid) and vc_sessions[uid].is_in_vc())
+    return (
+        f"{EM['crown']} <b>ADMIN DASHBOARD</b>\n"
+        f"{'─'*28}\n"
+        f"{EM['chart']} Total Clients   : <b>{total}</b>\n"
+        f"{EM['check']} Active Sub       : <b>{active}</b>\n"
+        f"{EM['green']} Online Bots      : <b>{online}</b>\n"
+        f"{EM['live']}  In Live VC       : <b>{live}</b>\n"
+        f"{'─'*28}"
+    )
+
+
+def kb_adm_home() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🤖 All Bots",          callback_data="adm:allbots"),
+         InlineKeyboardButton("📋 Manage Subs",       callback_data="adm:subs")],
+        [InlineKeyboardButton("➕ Add Client",        callback_data="adm:add"),
+         InlineKeyboardButton("📊 Full Stats",        callback_data="adm:stats")],
+        [InlineKeyboardButton("🚀 Start All",         callback_data="adm:startall"),
+         InlineKeyboardButton("🛑 Stop All",          callback_data="adm:stopall")],
+        [InlineKeyboardButton("🔃 Restart Platform",  callback_data="adm:restart")],
+    ])
+
+
+def adm_allbots_text() -> str:
+    data = load_data()
+    users = data.get("users", {})
+    if not users:
+        return f"{EM['bot']} <b>ALL BOTS</b>\n\n<i>Koi client nahi.</i>"
+    lines = [f"{EM['bot']} <b>ALL BOTS ({len(users)})</b>\n{'─'*28}"]
+    for uid, udata in users.items():
+        info    = bot_info_cache.get(uid, {})
+        uname   = f"@{info['username']}" if info.get("username") else "—"
+        fname   = info.get("first_name", f"User {uid}")
+        plan    = udata.get("plan", "basic")
+        pl_info = PLANS.get(plan, PLANS["basic"])
+        sess    = vc_sessions.get(uid)
+        status  = user_status_icon(uid)
+        dl      = days_left(udata)
+        in_vc   = f" {EM['live']} <i>Live</i>" if (sess and sess.is_in_vc()) else ""
+        lines.append(
+            f"\n{status} <b>{fname}</b> {uname}\n"
+            f"   {EM['person']} ID: <code>{uid}</code>{in_vc}\n"
+            f"   {pl_info['emoji']} {pl_info['name']} • {EM['cal']} {dl} din left"
+        )
+    return "\n".join(lines)
+
+
+def kb_adm_allbots() -> InlineKeyboardMarkup:
+    data = load_data()
+    users = data.get("users", {})
+    rows = []
+    for uid, udata in users.items():
+        info   = bot_info_cache.get(uid, {})
+        uname  = f"@{info['username']}" if info.get("username") else f"ID:{uid}"
+        fname  = info.get("first_name", f"User {uid}")
+        sess   = vc_sessions.get(uid)
+        online = "🟢" if (sess and sess.pyro) else "🔴"
+        running = bool(sess and sess.pyro)
+        rows.append([
+            InlineKeyboardButton(f"{online} {fname} ({uname})", callback_data=f"adm:user:{uid}"),
+        ])
+        rows.append([
+            InlineKeyboardButton("▶️ Start" if not running else "🛑 Stop",
+                callback_data=f"adm:startbot:{uid}" if not running else f"adm:stopbot:{uid}"),
+            InlineKeyboardButton("👁 View",  callback_data=f"adm:user:{uid}"),
+        ])
+    rows.append([InlineKeyboardButton("🔙 Back", callback_data="adm:home")])
+    return InlineKeyboardMarkup(rows)
+
+
+def adm_subs_text() -> str:
+    data = load_data()
+    users = data.get("users", {})
+    if not users:
+        return f"{EM['shield']} <b>MANAGE SUBSCRIPTIONS</b>\n\n<i>Koi client nahi.</i>"
+    lines = [f"{EM['shield']} <b>MANAGE SUBSCRIPTIONS</b>\n{'─'*28}"]
+    for uid, udata in users.items():
+        active = is_active(udata)
+        dl     = days_left(udata)
+        until  = udata.get("subscribed_until", 0)
+        plan   = udata.get("plan", "basic")
+        pl_inf = PLANS.get(plan, PLANS["basic"])
+        info   = bot_info_cache.get(uid, {})
+        name   = info.get("first_name", f"User {uid}")
+        icon   = EM["check"] if active else EM["cross"]
+        warn   = f" {EM['bell']} <b>Expiring soon!</b>" if (0 < dl <= 3) else ""
+        lines.append(
+            f"\n{icon} <b>{name}</b> <code>[{uid}]</code>{warn}\n"
+            f"   {pl_inf['emoji']} Plan: <b>{pl_inf['name']}</b>\n"
+            f"   {EM['cal']} Expires: <b>{fmt_date(until) if until else '—'}</b> "
+            f"({EM['clock']} <b>{dl} din</b>)"
+        )
+    return "\n".join(lines)
+
+
+def kb_adm_subs() -> InlineKeyboardMarkup:
+    data = load_data()
+    users = data.get("users", {})
+    rows = []
+    for uid, udata in users.items():
+        dl    = days_left(udata)
+        info  = bot_info_cache.get(uid, {})
+        name  = info.get("first_name", f"User {uid}")
+        icon  = "✅" if is_active(udata) else "❌"
+        warn  = " ⚠️" if (0 < dl <= 3) else ""
+        rows.append([
+            InlineKeyboardButton(f"{icon} {name}{warn}", callback_data=f"adm:user:{uid}"),
+            InlineKeyboardButton("➕ Extend",            callback_data=f"adm:extend:{uid}"),
+            InlineKeyboardButton("🗑 Remove",            callback_data=f"adm:remove:{uid}"),
+        ])
+    rows.append([InlineKeyboardButton("🔙 Back", callback_data="adm:home")])
+    return InlineKeyboardMarkup(rows)
+
+
+def adm_user_detail_text(uid: str) -> str:
+    udata = get_user(uid)
+    sess  = vc_sessions.get(uid)
+    info  = bot_info_cache.get(uid, {})
+    fname = info.get("first_name", f"User {uid}")
+    uname = f"@{info['username']}" if info.get("username") else "—"
+    plan  = udata.get("plan", "basic")
+    pl_inf = PLANS.get(plan, PLANS["basic"])
+    active = is_active(udata)
+    dl     = days_left(udata)
+    until  = udata.get("subscribed_until", 0)
+    added  = udata.get("added_on", 0)
+    phone  = udata.get("account_phone", "—")
+    chs    = udata.get("channels", [])
+    pl_lst = udata.get("playlist", [])
+    in_vc  = sess.is_in_vc() if sess else False
+    link   = (sess.active_link if sess else None) or "—"
+    online = bool(sess and sess.pyro)
+
+    ch_lines = ""
+    if chs:
+        ch_lines = "\n" + "\n".join(
+            f"   {'🟢' if (sess and uid in str(sess.monitor_tasks)) else '🔴'} <code>{c}</code>"
+            for c in chs)
+
+    return (
+        f"{EM['crown']} <b>{fname}</b> {uname}\n"
+        f"{'─'*28}\n"
+        f"{EM['person']} User ID  : <code>{uid}</code>\n"
+        f"{EM['bot']}  Bot      : {bot_display_name(uid)}\n"
+        f"{EM['phone']} Account  : <code>{phone}</code>\n"
+        f"{EM['live']}  In VC    : {'🟢 ' + link if in_vc else '🔴 No'}\n"
+        f"{EM['green']} Online   : {'✅ Yes' if online else '❌ No'}\n"
+        f"{'─'*28}\n"
+        f"{pl_inf['emoji']} Plan     : <b>{pl_inf['name']}</b> ({pl_inf['price']})\n"
+        f"{EM['channel']} Channels : <b>{len(chs)}</b> / {pl_inf['channels']}{ch_lines}\n"
+        f"{EM['music']} Playlist : <b>{len(pl_lst)}</b> track(s)"
+        + (f" / {pl_inf['audio']}" if pl_inf['audio'] else " / ∞") + "\n"
+        f"{EM['cal']} Sub Until: <b>{fmt_date(until) if until else '—'}</b>\n"
+        f"{EM['clock']} Remaining: <b>{dl} din</b>\n"
+        f"{EM['settings']} Added On : {fmt_date(added) if added else '—'}"
+    )
+
+
+def kb_adm_user(uid: str) -> InlineKeyboardMarkup:
+    sess    = vc_sessions.get(uid)
+    running = bool(sess and sess.pyro)
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("➕ Extend Sub",  callback_data=f"adm:extend:{uid}"),
+         InlineKeyboardButton("🔄 Change Plan", callback_data=f"adm:chplan:{uid}")],
+        [InlineKeyboardButton("🛑 Stop Bot" if running else "▶️ Start Bot",
+                               callback_data=f"adm:stopbot:{uid}" if running else f"adm:startbot:{uid}"),
+         InlineKeyboardButton("🗑 Remove",      callback_data=f"adm:remove:{uid}")],
+        [InlineKeyboardButton("📊 View Details", callback_data=f"adm:user:{uid}"),
+         InlineKeyboardButton("🔄 Restart Mon", callback_data=f"adm:restmon:{uid}")],
+        [InlineKeyboardButton("🎮 Control Bot",  callback_data=f"adm:ctrl:{uid}")],
+        [InlineKeyboardButton("🔙 Back",         callback_data="adm:subs")],
+    ])
+
+
+def adm_stats_text() -> str:
+    data = load_data()
+    users = data.get("users", {})
+    total  = len(users)
+    active = sum(1 for u in users.values() if is_active(u))
+    expired = total - active
+    online = sum(1 for uid in users if vc_sessions.get(uid) and vc_sessions[uid].pyro)
+    live   = sum(1 for uid in users if vc_sessions.get(uid) and vc_sessions[uid].is_in_vc())
+    basic_cnt = sum(1 for u in users.values() if u.get("plan","basic") == "basic")
+    pro_cnt   = sum(1 for u in users.values() if u.get("plan","basic") == "pro")
+    warn_cnt  = sum(1 for u in users.values() if 0 < days_left(u) <= 3)
+
+    lines = [
+        f"{EM['chart']} <b>PLATFORM FULL STATS</b>\n{'─'*28}",
+        f"{EM['person']} Total Clients : <b>{total}</b>",
+        f"{EM['check']} Active Sub    : <b>{active}</b>",
+        f"{EM['cross']} Expired       : <b>{expired}</b>",
+        f"{EM['green']} Online Bots   : <b>{online}</b>",
+        f"{EM['live']}  In Live VC    : <b>{live}</b>",
+        f"{EM['bell']} Expiring Soon : <b>{warn_cnt}</b>",
+        f"\n{EM['star']} Basic Plan    : <b>{basic_cnt}</b>",
+        f"{EM['diamond']} Pro Plan      : <b>{pro_cnt}</b>",
+        f"\n{'─'*28}\n{EM['clock']} Updated: {fmt_datetime(time.time())}",
+    ]
+    return "\n".join(lines)
+
+
+def welcome_message_for_client(uid: str, udata: dict) -> str:
+    info   = bot_info_cache.get(uid, {})
+    bname  = info.get("first_name", "VC Bot")
+    buname = f"@{info['username']}" if info.get("username") else "(bot link)"
+    plan   = udata.get("plan", "basic")
+    pl_inf = PLANS.get(plan, PLANS["basic"])
+    until  = udata.get("subscribed_until", 0)
+    added  = udata.get("added_on", time.time())
+
+    features = {
+        "basic": (
+            f"  {EM['check']} 1 Telegram Account login\n"
+            f"  {EM['check']} 1 Channel monitor\n"
+            f"  {EM['check']} 2 Audio files\n"
+            f"  {EM['check']} Auto Live Streaming\n"
+            f"  {EM['check']} Live Start/Stop Control"
+        ),
+        "pro": (
+            f"  {EM['check']} 1 Telegram Account login\n"
+            f"  {EM['check']} 3 Channels monitor\n"
+            f"  {EM['check']} Unlimited Audio files\n"
+            f"  {EM['check']} Auto Live Streaming\n"
+            f"  {EM['check']} Live Start/Stop Control\n"
+            f"  {EM['check']} Priority Support"
+        ),
+    }
+
+    return (
+        f"{EM['fire']} <b>Welcome to VC Streaming!</b>\n"
+        f"{'─'*30}\n\n"
+        f"{EM['bot']}  <b>Aapka Bot :</b> {buname}\n"
+        f"{EM['person']} <b>User ID   :</b> <code>{uid}</code>\n"
+        f"{pl_inf['emoji']} <b>Plan      :</b> <b>{pl_inf['name']}</b> ({pl_inf['price']})\n"
+        f"{EM['cal']} <b>Start Date:</b> {fmt_date(added)}\n"
+        f"{EM['cal']} <b>End Date  :</b> <b>{fmt_date(until)}</b>\n"
+        f"{EM['clock']} <b>Duration  :</b> {days_left(udata)} din\n\n"
+        f"{EM['trophy']} <b>Aapke Plan mein kya hai:</b>\n"
+        f"{features.get(plan, features['basic'])}\n\n"
+        f"{'─'*30}\n"
+        f"{EM['rocket']} <b>Kaise Shuru Karein:</b>\n"
+        f"  1{EM['zap']} {buname} pe /start karo\n"
+        f"  2{EM['zap']} Account {EM['arrow'] if False else '→'} Login (phone + OTP)\n"
+        f"  3{EM['zap']} Channel add karo\n"
+        f"  4{EM['zap']} Audio upload karo\n"
+        f"  5{EM['zap']} Live aane par auto stream shuru!\n\n"
+        f"{'─'*30}\n"
+        f"{EM['bell']} <b>Subscription end hone se 3 din pehle reminder milega.</b>\n\n"
+        f"{EM['shield']} <i>Koi problem? Bot mein Contact Admin button se reach karo.</i>"
+    )
+
+
+# ─────────────────────────────────────────────────────────────
+# ADMIN HANDLERS
+# ─────────────────────────────────────────────────────────────
+
+async def adm_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id if update.effective_user else 0
+    if uid != ADMIN_ID:
+        await update.message.reply_text(f"{EM['lock']} Unauthorized.", parse_mode=H); return
+    await update.message.reply_text(adm_home_text(), parse_mode=H, reply_markup=kb_adm_home())
+
+
+async def adm_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q or not q.from_user: return
+    await q.answer()
+    if q.from_user.id != ADMIN_ID:
+        await q.edit_message_text(f"{EM['lock']} Unauthorized."); return
+    cb = q.data
+
+    if cb == "adm:home":
+        ctx.user_data.clear()
+        await q.edit_message_text(adm_home_text(), parse_mode=H, reply_markup=kb_adm_home())
+
+    elif cb == "adm:allbots":
         await q.edit_message_text(
-            "<blockquote>🔑 <b>LOGIN</b></blockquote>\n\nSend your phone number:\n<i>Example: +919876543210</i>",
-            parse_mode=H, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="a:cancel")]]))
-        ctx.user_data["state"] = S_PHONE
-    elif cb == "a:logout":
-        phone = data.get("phone")
-        if phone:
-            stop_all_monitors()
-            if sess.is_in_vc(): await vc_leave()
+            adm_allbots_text(), parse_mode=H, reply_markup=kb_adm_allbots())
+
+    elif cb == "adm:subs":
+        await q.edit_message_text(
+            adm_subs_text(), parse_mode=H, reply_markup=kb_adm_subs())
+
+    elif cb == "adm:stats":
+        await q.edit_message_text(
+            adm_stats_text(), parse_mode=H,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔄 Refresh", callback_data="adm:stats")],
+                [InlineKeyboardButton("🔙 Back",    callback_data="adm:home")],
+            ]))
+
+    elif cb == "adm:add":
+        ctx.user_data["state"] = SA_USERID
+        await q.edit_message_text(
+            f"{EM['crown']} <b>ADD NEW CLIENT</b>\n{'─'*25}\n\n"
+            f"{EM['settings']} <b>Step 1 of 4</b>\n\n"
+            f"{EM['person']} Client ka <b>Telegram User ID</b> bhejo:\n"
+            f"<i>Example: 987654321</i>\n\n"
+            f"{EM['zap']} <i>ID pane ke liye: @userinfobot pe message karo</i>",
+            parse_mode=H,
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="adm:home")]]))
+
+    elif cb.startswith("adm:user:"):
+        uid = cb.split(":")[2]
+        if not get_user(uid):
+            await q.edit_message_text("❌ User not found.", parse_mode=H,
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="adm:subs")]])); return
+        await q.edit_message_text(
+            adm_user_detail_text(uid), parse_mode=H, reply_markup=kb_adm_user(uid))
+
+    elif cb.startswith("adm:chplan:"):
+        uid = cb.split(":")[2]
+        udata = get_user(uid)
+        current = udata.get("plan", "basic")
+        new_plan = "pro" if current == "basic" else "basic"
+        udata["plan"] = new_plan
+        save_user(uid, udata)
+        await q.edit_message_text(
+            f"{EM['check']} Plan changed to <b>{PLANS[new_plan]['name']}</b>",
+            parse_mode=H, reply_markup=kb_adm_user(uid))
+
+    elif cb.startswith("adm:extend:"):
+        uid = cb.split(":")[2]
+        ctx.user_data["state"] = SA_EXT_DAYS
+        ctx.user_data["ext_uid"] = uid
+        udata = get_user(uid)
+        await q.edit_message_text(
+            f"{EM['gift']} <b>EXTEND SUBSCRIPTION</b>\n{'─'*25}\n\n"
+            f"{EM['person']} Client: <code>{uid}</code>\n"
+            f"{EM['clock']} Current: <b>{days_left(udata)} din bache</b>\n"
+            f"{EM['cal']} Expires: <b>{fmt_date(udata.get('subscribed_until',0))}</b>\n\n"
+            f"Kitne <b>din aur</b> add karne hain?",
+            parse_mode=H,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("30 Din", callback_data=f"adm:extdays:{uid}:30"),
+                 InlineKeyboardButton("60 Din", callback_data=f"adm:extdays:{uid}:60"),
+                 InlineKeyboardButton("90 Din", callback_data=f"adm:extdays:{uid}:90")],
+                [InlineKeyboardButton("❌ Cancel", callback_data=f"adm:user:{uid}")],
+            ]))
+
+    elif cb.startswith("adm:extdays:"):
+        parts = cb.split(":")
+        uid  = parts[2]
+        days = int(parts[3])
+        udata = get_user(uid)
+        was_expired = not is_active(udata)
+        current_until = max(udata.get("subscribed_until", time.time()), time.time())
+        new_until = current_until + (days * 86400)
+        udata["subscribed_until"] = new_until
+        udata.setdefault("reminders_sent", []).clear()
+        save_user(uid, udata)
+        ctx.user_data.clear()
+        # Auto-restart bot if it was stopped due to expiry
+        auto_started = False
+        if uid not in client_bots:
+            await q.edit_message_text(f"{EM['rocket']} Subscription renewed — bot restart ho raha hai...", parse_mode=H)
+            auto_started = await launch_client_bot(uid)
+        restart_txt = f"\n{EM['rocket']} Bot auto-started!" if auto_started else (f"\n{EM['refresh']} Bot already running." if uid in client_bots else "")
+        # Notify client about renewal
+        cl_app = client_bots.get(uid)
+        if cl_app:
+            try:
+                await cl_app.bot.send_message(
+                    int(uid),
+                    f"{EM['gift']} <b>Subscription Renewed!</b>\n\n"
+                    f"{EM['check']} +{days} din add ho gaye\n"
+                    f"{EM['cal']} New Expiry: <b>{fmt_date(new_until)}</b>\n\n"
+                    f"{EM['rocket']} Bot active hai, enjoy!",
+                    parse_mode=H)
+            except Exception: pass
+        await q.edit_message_text(
+            f"{EM['check']} <b>Subscription Extended!</b>\n\n"
+            f"{EM['person']} User: <code>{uid}</code>\n"
+            f"{EM['gift']} Added: <b>+{days} din</b>\n"
+            f"{EM['cal']} New Expiry: <b>{fmt_date(new_until)}</b>"
+            f"{restart_txt}",
+            parse_mode=H, reply_markup=kb_adm_user(uid))
+
+    elif cb.startswith("adm:remove:"):
+        uid = cb.split(":")[2]
+        udata = get_user(uid)
+        info = bot_info_cache.get(uid, {})
+        name = info.get("first_name", f"User {uid}")
+        await q.edit_message_text(
+            f"{EM['warn']} <b>Confirm Remove?</b>\n\n{EM['person']} {name} <code>[{uid}]</code>",
+            parse_mode=H,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("✅ Haan, Hatao", callback_data=f"adm:confirm_rm:{uid}")],
+                [InlineKeyboardButton("❌ Cancel",      callback_data=f"adm:user:{uid}")],
+            ]))
+
+    elif cb.startswith("adm:confirm_rm:"):
+        uid = cb.split(":")[2]
+        await stop_client_bot(uid)
+        data = load_data(); data["users"].pop(uid, None); save_data(data)
+        await q.edit_message_text(
+            f"{EM['check']} Client <code>{uid}</code> remove ho gaya.",
+            parse_mode=H,
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="adm:subs")]]))
+
+    elif cb.startswith("adm:startbot:"):
+        uid = cb.split(":")[2]
+        await q.edit_message_text(f"{EM['rocket']} Starting bot...", parse_mode=H)
+        await launch_client_bot(uid)
+        await q.edit_message_text(adm_user_detail_text(uid), parse_mode=H, reply_markup=kb_adm_user(uid))
+
+    elif cb.startswith("adm:stopbot:"):
+        uid = cb.split(":")[2]
+        await q.edit_message_text(f"{EM['clock']} Stopping...", parse_mode=H)
+        await stop_client_bot(uid)
+        await q.edit_message_text(adm_user_detail_text(uid), parse_mode=H, reply_markup=kb_adm_user(uid))
+
+    elif cb.startswith("adm:restmon:"):
+        uid = cb.split(":")[2]
+        sess = get_vc_sess(uid)
+        stop_monitors(sess)
+        await asyncio.sleep(0.5)
+        udata = get_user(uid)
+        start_monitors(sess, uid, udata.get("channels", []))
+        running = sum(1 for t in sess.monitor_tasks.values() if not t.done())
+        await q.edit_message_text(
+            f"{EM['refresh']} Monitors restarted ({running} running)",
+            parse_mode=H, reply_markup=kb_adm_user(uid))
+
+    elif cb == "adm:startall":
+        data = load_data(); started = 0
+        await q.edit_message_text(f"{EM['rocket']} Starting all bots...", parse_mode=H)
+        for uid, udata in data.get("users", {}).items():
+            if is_active(udata) and uid not in client_bots:
+                await launch_client_bot(uid); started += 1
+        await q.edit_message_text(
+            f"{EM['check']} Start All — <b>{started}</b> bots started",
+            parse_mode=H, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="adm:home")]]))
+
+    elif cb == "adm:stopall":
+        uids = list(client_bots.keys())
+        await q.edit_message_text(f"{EM['clock']} Stopping all...", parse_mode=H)
+        for uid in uids: await stop_client_bot(uid)
+        await q.edit_message_text(
+            f"{EM['check']} All stopped — <b>{len(uids)}</b> bots",
+            parse_mode=H, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="adm:home")]]))
+
+    elif cb == "adm:restart":
+        await q.edit_message_text(f"{EM['refresh']} <b>Platform restarting...</b>", parse_mode=H)
+        await asyncio.sleep(1)
+        os.execv(sys.executable, [sys.executable] + sys.argv)
+
+    # ── ADMIN CONTROL BOT PANEL ───────────────────────────
+    elif cb.startswith("adm:ctrl:"):
+        uid   = cb.split(":")[2]
+        udata = get_user(uid)
+        if not udata:
+            await q.edit_message_text("❌ User not found.", parse_mode=H); return
+        sess   = get_vc_sess(uid)
+        plan   = udata.get("plan", "basic")
+        pl_inf = PLANS.get(plan, PLANS["basic"])
+        phone  = udata.get("account_phone", "—")
+        chs    = udata.get("channels", [])
+        pl_lst = udata.get("playlist", [])
+        in_vc  = sess.is_in_vc()
+        link   = sess.active_link or "—"
+        info   = bot_info_cache.get(uid, {})
+        fname  = info.get("first_name", f"User {uid}")
+        await q.edit_message_text(
+            f"{EM['crown']} <b>ADMIN CONTROL</b> — {fname}\n"
+            f"{'─'*28}\n"
+            f"{EM['phone']} Account : <code>{phone}</code>\n"
+            f"{EM['live']}  In VC   : {'🟢 ' + link if in_vc else '🔴 No'}\n"
+            f"{EM['channel']} Channels: <b>{len(chs)}</b>/{pl_inf['channels']}\n"
+            f"{EM['music']} Playlist: <b>{len(pl_lst)}</b> track(s)\n"
+            f"{'─'*28}\n"
+            f"<i>Admin ke taur pe client ka bot control karo</i>",
+            parse_mode=H,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("📢 Channels",    callback_data=f"adm:ctrl_ch:{uid}"),
+                 InlineKeyboardButton("🎵 Playlist",    callback_data=f"adm:ctrl_pl:{uid}")],
+                [InlineKeyboardButton("🎙 Live Control", callback_data=f"adm:ctrl_live:{uid}"),
+                 InlineKeyboardButton("🔄 Restart Mon", callback_data=f"adm:ctrl_restmon:{uid}")],
+                [InlineKeyboardButton("🛑 Force Leave VC", callback_data=f"adm:ctrl_fleave:{uid}"),
+                 InlineKeyboardButton("📊 Refresh",     callback_data=f"adm:ctrl:{uid}")],
+                [InlineKeyboardButton("🔙 Client",       callback_data=f"adm:user:{uid}")],
+            ]))
+
+    elif cb.startswith("adm:ctrl_ch:"):
+        uid   = cb.split(":")[2]
+        udata = get_user(uid)
+        chs   = udata.get("channels", [])
+        plan  = udata.get("plan", "basic")
+        limit = PLANS[plan]["channels"]
+        ch_text = "\n".join(f"{EM['live']}  <code>{c}</code>" for c in chs) if chs else "<i>Koi channel nahi.</i>"
+        rows = []
+        for i, ch in enumerate(chs):
+            name_ch = ch.replace("https://t.me/", "@")
+            rows.append([InlineKeyboardButton(f"❌ {name_ch}", callback_data=f"adm:ctrl_rmch:{uid}:{i}")])
+        rows.append([InlineKeyboardButton("➕ Add Channel", callback_data=f"adm:ctrl_addch:{uid}")])
+        rows.append([InlineKeyboardButton("🔙 Back", callback_data=f"adm:ctrl:{uid}")])
+        await q.edit_message_text(
+            f"{EM['channel']} <b>CHANNELS</b> — {bot_display_name(uid)}\n"
+            f"({len(chs)}/{limit})\n\n{ch_text}",
+            parse_mode=H, reply_markup=InlineKeyboardMarkup(rows))
+
+    elif cb.startswith("adm:ctrl_addch:"):
+        uid = cb.split(":")[2]
+        ctx.user_data["state"] = "ctrl_addch"
+        ctx.user_data["ctrl_uid"] = uid
+        await q.edit_message_text(
+            f"{EM['channel']} Channel link bhejo:\n<i>https://t.me/channelname</i>",
+            parse_mode=H,
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data=f"adm:ctrl_ch:{uid}")]]))
+
+    elif cb.startswith("adm:ctrl_rmch:"):
+        parts = cb.split(":")
+        uid = parts[2]; idx = int(parts[3])
+        udata = get_user(uid)
+        chs = udata.get("channels", [])
+        if 0 <= idx < len(chs):
+            removed = chs.pop(idx); udata["channels"] = chs; save_user(uid, udata)
+            sess = vc_sessions.get(uid)
+            if sess:
+                t = sess.monitor_tasks.pop(removed, None)
+                if t: t.cancel()
+        await q.edit_message_text(f"{EM['check']} Channel removed.", parse_mode=H,
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data=f"adm:ctrl_ch:{uid}")]]))
+
+    elif cb.startswith("adm:ctrl_pl:"):
+        uid   = cb.split(":")[2]
+        udata = get_user(uid)
+        pl    = udata.get("playlist", [])
+        plan  = udata.get("plan", "basic")
+        limit = PLANS[plan]["audio"]
+        pl_text = "\n".join(f"  {i+1}. {p['name']}" for i, p in enumerate(pl)) if pl else "<i>Koi track nahi.</i>"
+        lim_txt = f"/{limit}" if limit else "/∞"
+        rows = []
+        for i, p in enumerate(pl):
+            rows.append([InlineKeyboardButton(f"❌ {i+1}. {p['name']}", callback_data=f"adm:ctrl_rmpl:{uid}:{i}")])
+        rows.append([InlineKeyboardButton("➕ Add Audio",  callback_data=f"adm:ctrl_addpl:{uid}"),
+                     InlineKeyboardButton("🗑 Clear All",  callback_data=f"adm:ctrl_clrpl:{uid}")])
+        rows.append([InlineKeyboardButton("🔙 Back", callback_data=f"adm:ctrl:{uid}")])
+        await q.edit_message_text(
+            f"{EM['music']} <b>PLAYLIST</b> — {bot_display_name(uid)}\n"
+            f"({len(pl)}{lim_txt})\n\n{pl_text}\n\n"
+            f"⏱ Delay: <b>{udata.get('delay',30)}s</b>  ☕ Break: <b>{udata.get('break_time',300)}s</b>",
+            parse_mode=H, reply_markup=InlineKeyboardMarkup(rows))
+
+    elif cb.startswith("adm:ctrl_addpl:"):
+        uid = cb.split(":")[2]
+        ctx.user_data["state"] = "ctrl_addpl"
+        ctx.user_data["ctrl_uid"] = uid
+        await q.edit_message_text(
+            f"{EM['music']} Audio file upload karo (MP3/voice):",
+            parse_mode=H,
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data=f"adm:ctrl_pl:{uid}")]]))
+
+    elif cb.startswith("adm:ctrl_clrpl:"):
+        uid = cb.split(":")[2]
+        udata = get_user(uid); udata["playlist"] = []; save_user(uid, udata)
+        await q.edit_message_text(f"{EM['check']} Playlist cleared.",
+            parse_mode=H, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data=f"adm:ctrl_pl:{uid}")]]))
+
+    elif cb.startswith("adm:ctrl_rmpl:"):
+        parts = cb.split(":"); uid = parts[2]; idx = int(parts[3])
+        udata = get_user(uid); pl = udata.get("playlist", [])
+        if 0 <= idx < len(pl): pl.pop(idx)
+        udata["playlist"] = pl; save_user(uid, udata)
+        await q.edit_message_text(f"{EM['check']} Track removed.",
+            parse_mode=H, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data=f"adm:ctrl_pl:{uid}")]]))
+
+    elif cb.startswith("adm:ctrl_live:"):
+        uid   = cb.split(":")[2]
+        udata = get_user(uid)
+        chs   = udata.get("channels", [])
+        if not chs:
+            await q.edit_message_text(f"{EM['warn']} Koi channel nahi.",
+                parse_mode=H, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data=f"adm:ctrl:{uid}")]])); return
+        rows = []
+        for i, ch in enumerate(chs):
+            name_ch = ch.replace("https://t.me/", "@")
+            if len(name_ch) > 20: name_ch = name_ch[:20] + "…"
+            rows.append([
+                InlineKeyboardButton("▶️ Start", callback_data=f"adm:ctrl_lstart:{uid}:{i}"),
+                InlineKeyboardButton(name_ch,     callback_data=f"adm:ctrl:{uid}"),
+                InlineKeyboardButton("⏹ Stop",  callback_data=f"adm:ctrl_lstop:{uid}:{i}"),
+            ])
+        rows.append([InlineKeyboardButton("🔙 Back", callback_data=f"adm:ctrl:{uid}")])
+        await q.edit_message_text(
+            f"{EM['mic']} <b>LIVE CONTROL</b> — {bot_display_name(uid)}\n\nStart/Stop karo:",
+            parse_mode=H, reply_markup=InlineKeyboardMarkup(rows))
+
+    elif cb.startswith("adm:ctrl_lstart:") or cb.startswith("adm:ctrl_lstop:"):
+        parts  = cb.split(":")
+        action = parts[1]   # ctrl_lstart or ctrl_lstop
+        uid    = parts[2]; idx = int(parts[3])
+        udata  = get_user(uid); chs = udata.get("channels", [])
+        sess   = get_vc_sess(uid)
+        if 0 <= idx < len(chs):
+            link = chs[idx]
+            await q.edit_message_text(f"{EM['clock']} Processing...", parse_mode=H)
+            if action == "ctrl_lstart":
+                result = await create_live_in(sess, link)
+            else:
+                result = await end_live_in(sess, link)
+            # Rebuild live control keyboard
+            chs2 = get_user(uid).get("channels", [])
+            rows = []
+            for i, ch in enumerate(chs2):
+                n = ch.replace("https://t.me/", "@")
+                if len(n) > 20: n = n[:20] + "…"
+                rows.append([
+                    InlineKeyboardButton("▶️ Start", callback_data=f"adm:ctrl_lstart:{uid}:{i}"),
+                    InlineKeyboardButton(n,           callback_data=f"adm:ctrl:{uid}"),
+                    InlineKeyboardButton("⏹ Stop",  callback_data=f"adm:ctrl_lstop:{uid}:{i}"),
+                ])
+            rows.append([InlineKeyboardButton("🔙 Back", callback_data=f"adm:ctrl:{uid}")])
+            await q.edit_message_text(result, parse_mode=H, reply_markup=InlineKeyboardMarkup(rows))
+
+    elif cb.startswith("adm:ctrl_restmon:"):
+        uid  = cb.split(":")[2]
+        sess = get_vc_sess(uid)
+        stop_monitors(sess)
+        await asyncio.sleep(0.5)
+        udata = get_user(uid)
+        start_monitors(sess, uid, udata.get("channels", []))
+        running = sum(1 for t in sess.monitor_tasks.values() if not t.done())
+        await q.edit_message_text(
+            f"{EM['refresh']} Monitors restarted ({running} running)",
+            parse_mode=H, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data=f"adm:ctrl:{uid}")]]))
+
+    elif cb.startswith("adm:ctrl_fleave:"):
+        uid  = cb.split(":")[2]
+        sess = get_vc_sess(uid)
+        if not sess.is_in_vc():
+            await q.edit_message_text(f"{EM['warn']} Bot VC mein nahi hai.",
+                parse_mode=H, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data=f"adm:ctrl:{uid}")]])); return
+        link = sess.active_link or "?"
+        await vc_leave(sess)
+        await q.edit_message_text(
+            f"{EM['check']} Force left VC: <code>{link}</code>",
+            parse_mode=H, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data=f"adm:ctrl:{uid}")]]))
+
+    # Plan selection during add-user flow
+    elif cb.startswith("adm:selectplan:"):
+        plan = cb.split(":")[2]
+        ctx.user_data["new_plan"] = plan
+        ctx.user_data["state"] = SA_DAYS
+        pl_inf = PLANS[plan]
+        await q.edit_message_text(
+            f"{EM['crown']} <b>ADD NEW CLIENT</b>\n{'─'*25}\n\n"
+            f"{EM['settings']} <b>Step 4 of 4</b>\n\n"
+            f"{pl_inf['emoji']} Plan: <b>{pl_inf['name']}</b> — {pl_inf['desc']}\n\n"
+            f"{EM['cal']} <b>Kitne din</b> ka subscription dena hai?\n"
+            f"<i>Example: 30</i>",
+            parse_mode=H,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("30 Din",  callback_data=f"adm:quickdays:30"),
+                 InlineKeyboardButton("60 Din",  callback_data=f"adm:quickdays:60"),
+                 InlineKeyboardButton("90 Din",  callback_data=f"adm:quickdays:90")],
+                [InlineKeyboardButton("❌ Cancel", callback_data="adm:home")],
+            ]))
+
+    elif cb.startswith("adm:quickdays:"):
+        days = int(cb.split(":")[2])
+        await finalize_add_user(q, ctx, days)
+
+
+async def finalize_add_user(q_or_msg, ctx, days: int):
+    uid  = ctx.user_data.get("new_uid")
+    tok  = ctx.user_data.get("new_token")
+    plan = ctx.user_data.get("new_plan", "basic")
+    if not uid or not tok: ctx.user_data.clear(); return
+    until = time.time() + (days * 86400)
+    udata = {
+        "bot_token": tok, "plan": plan,
+        "subscribed_until": until, "added_on": time.time(),
+        "account_phone": None, "channels": [],
+        "playlist": [], "delay": 30, "break_time": 300,
+        "reminders_sent": [],
+    }
+    save_user(uid, udata)
+    ctx.user_data.clear()
+
+    edit_fn = q_or_msg.edit_message_text if hasattr(q_or_msg, "edit_message_text") else q_or_msg.reply_text
+    await edit_fn(f"{EM['rocket']} Bot shuru ho raha hai...", parse_mode=H)
+    ok = await launch_client_bot(uid)
+
+    info = bot_info_cache.get(uid, {})
+    welcome = welcome_message_for_client(uid, get_user(uid))
+    pl_inf  = PLANS.get(plan, PLANS["basic"])
+
+    await edit_fn(
+        f"{EM['check']} <b>CLIENT ADDED SUCCESSFULLY!</b>\n{'─'*30}\n\n"
+        f"{EM['person']} User ID  : <code>{uid}</code>\n"
+        f"{EM['bot']}  Bot      : {bot_display_name(uid)}\n"
+        f"{pl_inf['emoji']} Plan     : <b>{pl_inf['name']}</b>\n"
+        f"{EM['cal']} Expires  : <b>{fmt_date(until)}</b> ({days} din)\n"
+        f"{EM['rocket']} Status   : {'✅ Running' if ok else '⚠️ No session (client login karega)'}\n\n"
+        f"{EM['gift']} <b>Forward this to client:</b>",
+        parse_mode=H,
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📊 View Client", callback_data=f"adm:user:{uid}"),
+                                            InlineKeyboardButton("🔙 Panel",       callback_data="adm:home")]]))
+
+    # Send welcome message separately (admin can forward to client)
+    try:
+        send_fn = q_or_msg.message.reply_text if hasattr(q_or_msg, "message") else q_or_msg.reply_text
+        await send_fn(welcome, parse_mode=H)
+    except Exception: pass
+
+
+async def adm_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not ctx.user_data: return
+    msg = update.message
+    if not msg or not msg.chat or msg.chat.type != "private": return
+    if (update.effective_user.id if update.effective_user else 0) != ADMIN_ID: return
+    state = ctx.user_data.get("state")
+
+    if state == SA_USERID:
+        try:
+            uid = str(int((msg.text or "").strip()))
+            ctx.user_data["new_uid"] = uid
+            ctx.user_data["state"] = SA_TOKEN
+            await msg.reply_text(
+                f"{EM['crown']} <b>ADD NEW CLIENT</b>\n{'─'*25}\n\n"
+                f"{EM['settings']} <b>Step 2 of 4</b>\n\n"
+                f"{EM['person']} User ID: <code>{uid}</code> {EM['check']}\n\n"
+                f"{EM['bot']}  Client ka <b>Bot Token</b> bhejo:\n"
+                f"<i>(@BotFather se mila token)</i>",
+                parse_mode=H)
+        except ValueError:
+            await msg.reply_text(f"{EM['cross']} Valid User ID (number) bhejo.")
+
+    elif state == SA_TOKEN:
+        token = (msg.text or "").strip()
+        if ":" not in token or len(token) < 20:
+            await msg.reply_text(f"{EM['cross']} Valid bot token chahiye. Format: 12345:ABC..."); return
+        ctx.user_data["new_token"] = token
+        ctx.user_data["state"] = SA_PLAN
+        await msg.reply_text(
+            f"{EM['crown']} <b>ADD NEW CLIENT</b>\n{'─'*25}\n\n"
+            f"{EM['settings']} <b>Step 3 of 4</b>\n\n"
+            f"{EM['bot']}  Token saved {EM['check']}\n\n"
+            f"{EM['trophy']} <b>Kaunsa subscription plan dena hai?</b>\n\n"
+            f"{EM['star']} <b>Basic — ₹2,000/month</b>\n"
+            f"  • 1 Account • 1 Channel • 2 Audio\n\n"
+            f"{EM['diamond']} <b>Pro — Custom Pricing</b>\n"
+            f"  • 1 Account • 3 Channels • Unlimited Audio",
+            parse_mode=H,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton(f"⭐ Basic — ₹2,000", callback_data="adm:selectplan:basic")],
+                [InlineKeyboardButton(f"💎 Pro — Custom",   callback_data="adm:selectplan:pro")],
+                [InlineKeyboardButton("❌ Cancel",           callback_data="adm:home")],
+            ]))
+
+    elif state == SA_DAYS:
+        try:
+            days = int((msg.text or "").strip())
+            await finalize_add_user(msg, ctx, days)
+        except ValueError:
+            await msg.reply_text(f"{EM['cross']} Number bhejo (days).")
+
+    elif state == SA_EXT_DAYS:
+        try:
+            days = int((msg.text or "").strip())
+            uid  = ctx.user_data.get("ext_uid")
+            udata = get_user(uid)
+            current_until = max(udata.get("subscribed_until", time.time()), time.time())
+            new_until = current_until + (days * 86400)
+            udata["subscribed_until"] = new_until
+            udata.setdefault("reminders_sent", []).clear()
+            save_user(uid, udata)
+            ctx.user_data.clear()
+            # Auto-restart if bot was stopped
+            auto_started = False
+            if uid not in client_bots:
+                auto_started = await launch_client_bot(uid)
+            # Notify client
+            cl_app = client_bots.get(uid)
+            if cl_app:
+                try:
+                    await cl_app.bot.send_message(
+                        int(uid),
+                        f"{EM['gift']} <b>Subscription Renewed!</b>\n\n"
+                        f"{EM['check']} +{days} din add ho gaye\n"
+                        f"{EM['cal']} New Expiry: <b>{fmt_date(new_until)}</b>\n\n"
+                        f"{EM['rocket']} Bot active hai, enjoy!",
+                        parse_mode=H)
+                except Exception: pass
+            restart_txt = f"\n{EM['rocket']} Bot auto-started!" if auto_started else ""
+            await msg.reply_text(
+                f"{EM['check']} Subscription extended!\n"
+                f"New expiry: <b>{fmt_date(new_until)}</b>{restart_txt}",
+                parse_mode=H,
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data=f"adm:user:{uid}")]]))
+        except ValueError:
+            await msg.reply_text(f"{EM['cross']} Number bhejo.")
+
+    elif state == "ctrl_addch":
+        uid  = ctx.user_data.get("ctrl_uid")
+        link = (msg.text or "").strip()
+        if not link.startswith("https://t.me/"):
+            await msg.reply_text(f"{EM['cross']} <code>https://t.me/</code> se shuru karo.", parse_mode=H); return
+        udata = get_user(uid)
+        plan  = udata.get("plan", "basic")
+        limit = PLANS[plan]["channels"]
+        chs   = udata.setdefault("channels", [])
+        if len(chs) >= limit:
+            await msg.reply_text(
+                f"{EM['lock']} Channel limit ({limit}) reached for {PLANS[plan]['name']} plan.",
+                parse_mode=H); return
+        if link not in chs:
+            chs.append(link); save_user(uid, udata)
+            sess = vc_sessions.get(uid)
+            if sess and sess.pyro: start_monitors(sess, uid, [link])
+        ctx.user_data.clear()
+        await msg.reply_text(
+            f"{EM['check']} Channel added for <code>{uid}</code>:\n<code>{link}</code>",
+            parse_mode=H,
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Channels", callback_data=f"adm:ctrl_ch:{uid}")]]))
+
+    elif state == "ctrl_addpl":
+        uid = ctx.user_data.get("ctrl_uid")
+        doc = msg.document or msg.audio or msg.voice
+        udata = get_user(uid)
+        plan  = udata.get("plan", "basic")
+        limit = PLANS[plan]["audio"]
+        pl    = udata.get("playlist", [])
+        if limit and len(pl) >= limit:
+            await msg.reply_text(
+                f"{EM['lock']} Audio limit ({limit}) reached for {PLANS[plan]['name']} plan.",
+                parse_mode=H); return
+        if doc:
+            fname = getattr(doc, "file_name", None) or f"audio_{int(time.time())}.mp3"
+            spath = os.path.join(AUDIO_DIR, f"{uid}_{fname}")
+            try:
+                tf = await ctx.bot.get_file(doc.file_id)
+                await tf.download_to_drive(spath)
+                udata.setdefault("playlist", []).append({"path": spath, "name": fname})
+                save_user(uid, udata)
+                ctx.user_data.clear()
+                await msg.reply_text(
+                    f"{EM['check']} Audio added for <code>{uid}</code>: <code>{fname}</code>",
+                    parse_mode=H,
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Playlist", callback_data=f"adm:ctrl_pl:{uid}")]]))
+            except Exception as ex:
+                await msg.reply_text(f"{EM['cross']} Upload failed: <code>{ex}</code>", parse_mode=H)
+        elif msg.text:
+            path = (msg.text or "").strip()
+            if not os.path.isfile(path):
+                await msg.reply_text(f"{EM['cross']} File not found: <code>{path}</code>", parse_mode=H); return
+            name = os.path.basename(path)
+            udata.setdefault("playlist", []).append({"path": path, "name": name})
+            save_user(uid, udata)
+            ctx.user_data.clear()
+            await msg.reply_text(
+                f"{EM['check']} Added path for <code>{uid}</code>: <code>{name}</code>",
+                parse_mode=H,
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Playlist", callback_data=f"adm:ctrl_pl:{uid}")]]))
+
+
+# ─────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════
+#   CLIENT BOT
+# ══════════════════════════════════════════════════════════════
+# ─────────────────────────────────────────────────────────────
+
+def cl_home_text(uid: str) -> str:
+    udata = get_user(uid)
+    sess  = get_vc_sess(uid)
+    plan  = udata.get("plan", "basic")
+    pl_inf = PLANS.get(plan, PLANS["basic"])
+    dl    = days_left(udata)
+    phone = udata.get("account_phone", "—")
+    in_vc = sess.is_in_vc()
+    link  = sess.active_link or "—"
+    warn  = f"\n{EM['bell']} <b>Subscription {dl} din mein expire hogi!</b>" if 0 < dl <= 3 else ""
+    return (
+        f"{EM['mic']} <b>VC STREAMING BOT</b>\n"
+        f"{'─'*26}\n"
+        f"{EM['phone']} Account  : <code>{phone}</code>\n"
+        f"{EM['live']}  Status   : {'🟢 Live — ' + link if in_vc else '🔴 Idle'}\n"
+        f"{pl_inf['emoji']} Plan     : <b>{pl_inf['name']}</b>\n"
+        f"{EM['clock']} Sub Left : <b>{dl} din</b>"
+        f"{warn}"
+    )
+
+
+def kb_cl_home(uid: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("👤 Account",     callback_data=f"c:account:{uid}"),
+         InlineKeyboardButton("📢 Channels",    callback_data=f"c:channels:{uid}")],
+        [InlineKeyboardButton("🎵 Playlist",    callback_data=f"c:playlist:{uid}"),
+         InlineKeyboardButton("🎙 Live Ctrl",   callback_data=f"c:live:{uid}")],
+        [InlineKeyboardButton("🔄 Restart Mon", callback_data=f"c:restmon:{uid}"),
+         InlineKeyboardButton("📊 Status",      callback_data=f"c:status:{uid}")],
+        [InlineKeyboardButton("📞 Contact Admin", callback_data=f"c:contact:{uid}")],
+    ])
+
+
+def kb_cl_account(uid: str) -> InlineKeyboardMarkup:
+    udata = get_user(uid); sess = vc_sessions.get(uid)
+    logged = bool(udata.get("account_phone") and sess and sess.pyro)
+    rows = []
+    if logged:
+        rows.append([InlineKeyboardButton("🚪 Logout", callback_data=f"c:logout:{uid}")])
+    else:
+        rows.append([InlineKeyboardButton("🔑 Login",  callback_data=f"c:login:{uid}")])
+    rows.append([InlineKeyboardButton("🔙 Back", callback_data=f"c:home:{uid}")])
+    return InlineKeyboardMarkup(rows)
+
+
+def kb_cl_channels(uid: str) -> InlineKeyboardMarkup:
+    udata = get_user(uid)
+    chs   = udata.get("channels", [])
+    plan  = udata.get("plan", "basic")
+    limit = PLANS[plan]["channels"]
+    rows  = []
+    for i, ch in enumerate(chs):
+        name = ch.replace("https://t.me/", "@")
+        rows.append([InlineKeyboardButton(f"❌ {name}", callback_data=f"c:rmch:{uid}:{i}")])
+    if len(chs) < limit:
+        rows.append([InlineKeyboardButton("➕ Add Channel", callback_data=f"c:addch:{uid}")])
+    else:
+        rows.append([InlineKeyboardButton(f"🔒 Limit: {limit} (Plan upgrade karo)", callback_data=f"c:home:{uid}")])
+    rows.append([InlineKeyboardButton("🔙 Back", callback_data=f"c:home:{uid}")])
+    return InlineKeyboardMarkup(rows)
+
+
+def kb_cl_playlist(uid: str) -> InlineKeyboardMarkup:
+    udata = get_user(uid)
+    pl    = udata.get("playlist", [])
+    plan  = udata.get("plan", "basic")
+    limit = PLANS[plan]["audio"]
+    rows  = []
+    for i, p in enumerate(pl):
+        rows.append([InlineKeyboardButton(f"❌ {i+1}. {p['name']}", callback_data=f"c:rmpl:{uid}:{i}")])
+    can_add = (limit is None) or (len(pl) < limit)
+    if can_add:
+        rows.append([InlineKeyboardButton("➕ Add Audio", callback_data=f"c:addpl:{uid}"),
+                     InlineKeyboardButton("🗑 Clear All", callback_data=f"c:clrpl:{uid}")])
+    else:
+        rows.append([InlineKeyboardButton(f"🔒 Max {limit} audio (Plan upgrade karo)", callback_data=f"c:home:{uid}")])
+    rows.append([InlineKeyboardButton("⏱ Delay",  callback_data=f"c:delay:{uid}"),
+                 InlineKeyboardButton("☕ Break",  callback_data=f"c:break:{uid}")])
+    rows.append([InlineKeyboardButton("🔙 Back",   callback_data=f"c:home:{uid}")])
+    return InlineKeyboardMarkup(rows)
+
+
+def kb_cl_live(uid: str) -> InlineKeyboardMarkup:
+    udata = get_user(uid)
+    chs   = udata.get("channels", [])
+    rows  = []
+    for i, ch in enumerate(chs):
+        name = ch.replace("https://t.me/", "@")
+        if len(name) > 20: name = name[:20] + "…"
+        rows.append([
+            InlineKeyboardButton("▶️ Start", callback_data=f"c:lstart:{uid}:{i}"),
+            InlineKeyboardButton(name,        callback_data=f"c:home:{uid}"),
+            InlineKeyboardButton("⏹ Stop",  callback_data=f"c:lstop:{uid}:{i}"),
+        ])
+    rows.append([InlineKeyboardButton("🔙 Back", callback_data=f"c:home:{uid}")])
+    return InlineKeyboardMarkup(rows)
+
+
+def make_client_handlers(uid: str):
+
+    def _is_allowed(user_id: int) -> bool:
+        return str(user_id) == uid or user_id == ADMIN_ID
+
+    def _is_admin(user_id: int) -> bool:
+        return user_id == ADMIN_ID and str(user_id) != uid
+
+    def _cl_home_text_for(requester_id: int) -> str:
+        base = cl_home_text(uid)
+        if _is_admin(requester_id):
+            info  = bot_info_cache.get(uid, {})
+            fname = info.get("first_name", f"User {uid}")
+            return (
+                f"{EM['crown']} <b>ADMIN MODE</b> — controlling <b>{fname}</b>\n"
+                f"{'─'*28}\n" + base
+            )
+        return base
+
+    def _kb_home_for(requester_id: int) -> InlineKeyboardMarkup:
+        rows = [
+            [InlineKeyboardButton("👤 Account",     callback_data=f"c:account:{uid}"),
+             InlineKeyboardButton("📢 Channels",    callback_data=f"c:channels:{uid}")],
+            [InlineKeyboardButton("🎵 Playlist",    callback_data=f"c:playlist:{uid}"),
+             InlineKeyboardButton("🎙 Live Ctrl",   callback_data=f"c:live:{uid}")],
+            [InlineKeyboardButton("🔄 Restart Mon", callback_data=f"c:restmon:{uid}"),
+             InlineKeyboardButton("📊 Status",      callback_data=f"c:status:{uid}")],
+        ]
+        if not _is_admin(requester_id):
+            rows.append([InlineKeyboardButton("📞 Contact Admin", callback_data=f"c:contact:{uid}")])
+        return InlineKeyboardMarkup(rows)
+
+    async def cl_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+        user = update.effective_user
+        if not user or not _is_allowed(user.id): return
+        udata = get_user(uid)
+        if not is_active(udata) and not _is_admin(user.id):
+            await update.message.reply_text(
+                f"{EM['warn']} <b>SUBSCRIPTION EXPIRED</b>\n\n"
+                f"Aapki subscription khatam ho gayi hai.\n"
+                f"{EM['bell']} Admin se renew karwao.",
+                parse_mode=H); return
+        await update.message.reply_text(
+            _cl_home_text_for(user.id), parse_mode=H,
+            reply_markup=_kb_home_for(user.id))
+
+    async def cl_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+        q = update.callback_query
+        if not q or not q.from_user: return
+        await q.answer()
+        if not _is_allowed(q.from_user.id): return
+        udata = get_user(uid)
+        if not is_active(udata) and not _is_admin(q.from_user.id):
+            await q.edit_message_text(
+                f"{EM['warn']} <b>Subscription expired.</b>\nAdmin se contact karo.",
+                parse_mode=H); return
+        cb = q.data
+        sess = get_vc_sess(uid)
+        requester = q.from_user.id
+
+        if cb == f"c:home:{uid}":
+            ctx.user_data.clear()
+            await q.edit_message_text(
+                _cl_home_text_for(requester), parse_mode=H,
+                reply_markup=_kb_home_for(requester))
+
+        elif cb == f"c:account:{uid}":
+            udata = get_user(uid)
+            phone = udata.get("account_phone", "—")
+            logged = bool(udata.get("account_phone") and sess.pyro)
+            await q.edit_message_text(
+                f"{EM['person']} <b>ACCOUNT</b>\n{'─'*20}\n\n"
+                + (f"{EM['check']} Logged in: <code>{phone}</code>" if logged
+                   else f"{EM['cross']} Not logged in.\n\nLogin karo account se."),
+                parse_mode=H, reply_markup=kb_cl_account(uid))
+
+        elif cb == f"c:login:{uid}":
+            ctx.user_data["state"] = SC_PHONE
+            await q.edit_message_text(
+                f"{EM['phone']} <b>LOGIN</b>\n\nPhone number bhejo:\n<i>+919876543210</i>",
+                parse_mode=H,
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data=f"c:account:{uid}")]]))
+
+        elif cb == f"c:logout:{uid}":
+            stop_monitors(sess)
+            if sess.is_in_vc(): await vc_leave(sess)
             if sess.keepalive_task: sess.keepalive_task.cancel()
             if sess.pyro:
                 try: await sess.pyro.stop()
                 except Exception: pass
                 sess.pyro = None
-            data["phone"] = None; save_data(data)
-        await q.edit_message_text("✅ <b>Logged out.</b>", parse_mode=H, reply_markup=kb_account(False))
-    elif cb == "a:cancel":
-        ctx.user_data.pop("state", None)
-        await q.edit_message_text(main_text(load_data()), parse_mode=H, reply_markup=kb_main())
-    elif cb == "ch:add":
-        ctx.user_data["state"] = S_ADD_CHANNEL
-        await q.edit_message_text(
-            "<blockquote>📢 <b>ADD CHANNEL</b></blockquote>\n\nSend the link:\n<i>https://t.me/channelname</i>",
-            parse_mode=H, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="m:channels")]]))
-    elif cb.startswith("ch:remove:"):
-        idx = int(cb.split(":")[2]); chs = data.get("channels", [])
-        if 0 <= idx < len(chs):
-            removed = chs.pop(idx); data["channels"] = chs; save_data(data)
-            t = sess.monitor_tasks.pop(removed, None)
-            if t: t.cancel()
-        data = load_data()
-        await q.edit_message_text(channels_text(data), parse_mode=H, reply_markup=kb_channels(data.get("channels", [])))
-    elif cb == "pl:add":
-        ctx.user_data["state"] = S_ADD_AUDIO
-        await q.edit_message_text(
-            "<blockquote>🎵 <b>ADD AUDIO</b></blockquote>\n\nUpload MP3 / audio / voice file:",
-            parse_mode=H, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="m:playlist")]]))
-    elif cb == "pl:clear":
-        data["playlist"] = []; save_data(data)
-        await q.edit_message_text(playlist_text(data), parse_mode=H, reply_markup=kb_playlist([]))
-    elif cb.startswith("pl:remove:"):
-        idx = int(cb.split(":")[2]); pl = data.get("playlist", [])
-        if 0 <= idx < len(pl): pl.pop(idx); data["playlist"] = pl; save_data(data)
-        data = load_data()
-        await q.edit_message_text(playlist_text(data), parse_mode=H, reply_markup=kb_playlist(data.get("playlist", [])))
-    elif cb == "pl:delay":
-        ctx.user_data["state"] = S_SET_DELAY
-        await q.edit_message_text(
-            f"<blockquote>⏱ <b>SET DELAY</b></blockquote>\n\nCurrent: <b>{data.get('delay',30)}s</b>\n\nSend seconds:",
-            parse_mode=H, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="m:playlist")]]))
-    elif cb == "pl:break":
-        ctx.user_data["state"] = S_SET_BREAK
-        await q.edit_message_text(
-            f"<blockquote>☕ <b>SET BREAK</b></blockquote>\n\nCurrent: <b>{data.get('break_time',300)}s</b>\n\nSend seconds:",
-            parse_mode=H, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="m:playlist")]]))
+            udata = get_user(uid); udata["account_phone"] = None; save_user(uid, udata)
+            await q.edit_message_text(
+                f"{EM['check']} <b>Logged out.</b>", parse_mode=H, reply_markup=kb_cl_account(uid))
 
-async def on_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    state = ctx.user_data.get("state")
-    msg = update.message; data = load_data()
+        elif cb == f"c:channels:{uid}":
+            udata = get_user(uid)
+            chs   = udata.get("channels", [])
+            plan  = udata.get("plan", "basic")
+            limit = PLANS[plan]["channels"]
+            ch_text = "\n".join(f"{EM['live']}  <code>{c}</code>" for c in chs) if chs else "<i>Koi channel nahi.</i>"
+            await q.edit_message_text(
+                f"{EM['channel']} <b>CHANNELS</b> ({len(chs)}/{limit})\n{'─'*20}\n\n{ch_text}",
+                parse_mode=H, reply_markup=kb_cl_channels(uid))
 
-    if state == S_PHONE:
-        phone = msg.text.strip(); c = make_pyro(phone)
-        await c.connect()
-        try:
-            sent = await c.send_code(phone)
-            ctx.user_data.update({"tmp_phone": phone, "tmp_client": c, "tmp_hash": sent.phone_code_hash, "state": S_CODE})
-            await msg.reply_text("🔢 <b>OTP sent!</b> Enter the code:", parse_mode=H)
-        except Exception as e:
-            await c.disconnect(); ctx.user_data.pop("state", None)
-            await msg.reply_text(f"❌ Error: <code>{e}</code>", parse_mode=H)
-    elif state == S_CODE:
-        c = ctx.user_data.get("tmp_client")
-        if not c: ctx.user_data.pop("state", None); return
-        try:
-            await c.sign_in(ctx.user_data["tmp_phone"], ctx.user_data["tmp_hash"], msg.text.strip())
-            await finalize_login(msg, ctx, c)
-        except Exception as e:
-            if any(k in str(e).lower() for k in ("2fa", "password", "session_password")):
-                ctx.user_data["state"] = S_PASS
-                await msg.reply_text("🔑 Enter your <b>2FA password</b>:", parse_mode=H)
-            else:
-                await c.disconnect(); ctx.user_data.pop("state", None)
-                await msg.reply_text(f"❌ Login failed: <code>{e}</code>", parse_mode=H)
-    elif state == S_PASS:
-        c = ctx.user_data.get("tmp_client")
-        if not c: ctx.user_data.pop("state", None); return
-        try:
-            await c.check_password(msg.text.strip()); await finalize_login(msg, ctx, c)
-        except Exception as e:
-            await c.disconnect(); ctx.user_data.pop("state", None)
-            await msg.reply_text(f"❌ Password error: <code>{e}</code>", parse_mode=H)
-    elif state == S_ADD_CHANNEL:
-        link = msg.text.strip()
-        if not link.startswith("https://t.me/"):
-            await msg.reply_text("❌ Must start with <code>https://t.me/</code>", parse_mode=H); return
-        chs = data.setdefault("channels", [])
-        if link not in chs:
-            chs.append(link); save_data(data)
-            if sess.pyro: start_monitors([link])
-        ctx.user_data.pop("state", None)
-        await msg.reply_text(f"✅ Monitoring:\n<code>{link}</code>", parse_mode=H,
-                             reply_markup=kb_channels(data.get("channels", [])))
-    elif state == S_ADD_AUDIO:
-        doc = msg.document or msg.audio or msg.voice
-        if doc:
-            fname = getattr(doc, "file_name", None) or f"audio_{int(time.time())}.mp3"
-            spath = os.path.join(AUDIO_DIR, fname)
+        elif cb == f"c:addch:{uid}":
+            ctx.user_data["state"] = SC_CHANNEL
+            await q.edit_message_text(
+                f"{EM['channel']} <b>ADD CHANNEL</b>\n\nLink bhejo:\n<i>https://t.me/yourchannel</i>",
+                parse_mode=H,
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data=f"c:channels:{uid}")]]))
+
+        elif cb.startswith(f"c:rmch:{uid}:"):
+            idx   = int(cb.split(":")[-1])
+            udata = get_user(uid)
+            chs   = udata.get("channels", [])
+            if 0 <= idx < len(chs):
+                removed = chs.pop(idx); udata["channels"] = chs; save_user(uid, udata)
+                t = sess.monitor_tasks.pop(removed, None)
+                if t: t.cancel()
+            await q.edit_message_text(f"{EM['check']} Channel removed.", parse_mode=H, reply_markup=kb_cl_channels(uid))
+
+        elif cb == f"c:playlist:{uid}":
+            udata  = get_user(uid)
+            pl     = udata.get("playlist", [])
+            plan   = udata.get("plan", "basic")
+            limit  = PLANS[plan]["audio"]
+            pl_txt = "\n".join(f"  {i+1}. {p['name']}" for i, p in enumerate(pl)) if pl else "<i>Koi track nahi.</i>"
+            lim_txt = f"/{limit}" if limit else "/∞"
+            await q.edit_message_text(
+                f"{EM['music']} <b>PLAYLIST</b> ({len(pl)}{lim_txt})\n{'─'*20}\n\n{pl_txt}\n\n"
+                f"{EM['clock']} Delay: <b>{udata.get('delay',30)}s</b>   {EM['stop']} Break: <b>{udata.get('break_time',300)}s</b>",
+                parse_mode=H, reply_markup=kb_cl_playlist(uid))
+
+        elif cb == f"c:addpl:{uid}":
+            ctx.user_data["state"] = SC_AUDIO
+            await q.edit_message_text(
+                f"{EM['music']} <b>ADD AUDIO</b>\n\nMP3/audio/voice file upload karo:",
+                parse_mode=H,
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data=f"c:playlist:{uid}")]]))
+
+        elif cb == f"c:clrpl:{uid}":
+            udata = get_user(uid); udata["playlist"] = []; save_user(uid, udata)
+            await q.edit_message_text(f"{EM['check']} Playlist cleared.", parse_mode=H, reply_markup=kb_cl_playlist(uid))
+
+        elif cb.startswith(f"c:rmpl:{uid}:"):
+            idx = int(cb.split(":")[-1])
+            udata = get_user(uid); pl = udata.get("playlist", [])
+            if 0 <= idx < len(pl): pl.pop(idx)
+            udata["playlist"] = pl; save_user(uid, udata)
+            await q.edit_message_text(f"{EM['check']} Track removed.", parse_mode=H, reply_markup=kb_cl_playlist(uid))
+
+        elif cb == f"c:delay:{uid}":
+            ctx.user_data["state"] = SC_DELAY
+            udata = get_user(uid)
+            await q.edit_message_text(
+                f"{EM['clock']} <b>SET DELAY</b>\n\nCurrent: <b>{udata.get('delay',30)}s</b>\n\nSeconds bhejo:",
+                parse_mode=H,
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data=f"c:playlist:{uid}")]]))
+
+        elif cb == f"c:break:{uid}":
+            ctx.user_data["state"] = SC_BREAK
+            udata = get_user(uid)
+            await q.edit_message_text(
+                f"{EM['stop']} <b>SET BREAK</b>\n\nCurrent: <b>{udata.get('break_time',300)}s</b>\n\nSeconds bhejo:",
+                parse_mode=H,
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data=f"c:playlist:{uid}")]]))
+
+        elif cb == f"c:live:{uid}":
+            udata = get_user(uid)
+            chs   = udata.get("channels", [])
+            if not chs:
+                await q.edit_message_text(
+                    f"{EM['warn']} Pehle channel add karo.", parse_mode=H,
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data=f"c:home:{uid}")]])); return
+            await q.edit_message_text(
+                f"{EM['mic']} <b>LIVE CONTROL</b>\n\nChannel ka Start/Stop karo:",
+                parse_mode=H, reply_markup=kb_cl_live(uid))
+
+        elif cb.startswith(f"c:lstart:{uid}:") or cb.startswith(f"c:lstop:{uid}:"):
+            action = "start" if "lstart" in cb else "stop"
+            idx    = int(cb.split(":")[-1])
+            udata  = get_user(uid); chs = udata.get("channels", [])
+            if 0 <= idx < len(chs):
+                link = chs[idx]
+                await q.edit_message_text(f"{EM['clock']} Processing...", parse_mode=H)
+                result = await (create_live_in(sess, link) if action == "start" else end_live_in(sess, link))
+                await q.edit_message_text(result, parse_mode=H, reply_markup=kb_cl_live(uid))
+
+        elif cb == f"c:restmon:{uid}":
+            stop_monitors(sess)
+            await asyncio.sleep(0.5)
+            udata = get_user(uid)
+            start_monitors(sess, uid, udata.get("channels", []))
+            running = sum(1 for t in sess.monitor_tasks.values() if not t.done())
+            await q.edit_message_text(
+                f"{EM['refresh']} Monitors restarted ({running} running)",
+                parse_mode=H, reply_markup=_kb_home_for(requester))
+
+        elif cb == f"c:status:{uid}":
             try:
-                tf = await ctx.bot.get_file(doc.file_id); await tf.download_to_drive(spath)
-                data.setdefault("playlist", []).append({"path": spath, "name": fname}); save_data(data)
-                ctx.user_data.pop("state", None)
-                await msg.reply_text(f"✅ <b>Added:</b> <code>{fname}</code>", parse_mode=H,
-                                     reply_markup=kb_playlist(data.get("playlist", [])))
-            except Exception as e:
-                await msg.reply_text(f"❌ Upload failed: <code>{e}</code>", parse_mode=H)
-        elif msg.text:
-            path = msg.text.strip()
-            if not os.path.isfile(path):
-                await msg.reply_text(f"❌ Not found: <code>{path}</code>", parse_mode=H); return
-            name = os.path.basename(path)
-            data.setdefault("playlist", []).append({"path": path, "name": name}); save_data(data)
-            ctx.user_data.pop("state", None)
-            await msg.reply_text(f"✅ <b>Added:</b> <code>{name}</code>", parse_mode=H,
-                                 reply_markup=kb_playlist(data.get("playlist", [])))
-    elif state == S_SET_DELAY:
-        try:
-            val = int(msg.text.strip()); data["delay"] = val; save_data(data)
-            ctx.user_data.pop("state", None)
-            await msg.reply_text(f"✅ <b>Delay set to {val}s</b>", parse_mode=H,
-                                 reply_markup=kb_playlist(data.get("playlist", [])))
-        except ValueError:
-            await msg.reply_text("❌ Send a number.")
-    elif state == S_SET_BREAK:
-        try:
-            val = int(msg.text.strip()); data["break_time"] = val; save_data(data)
-            ctx.user_data.pop("state", None)
-            await msg.reply_text(f"✅ <b>Break set to {val}s</b>", parse_mode=H,
-                                 reply_markup=kb_playlist(data.get("playlist", [])))
-        except ValueError:
-            await msg.reply_text("❌ Send a number.")
+                await q.edit_message_text(
+                    _cl_home_text_for(requester), parse_mode=H,
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("🔄 Refresh", callback_data=f"c:status:{uid}")],
+                        [InlineKeyboardButton("🔙 Back",    callback_data=f"c:home:{uid}")],
+                    ]))
+            except Exception: pass
 
-async def finalize_login(msg, ctx, c):
+        elif cb == f"c:contact:{uid}":
+            try:
+                udata = get_user(uid)
+                user  = q.from_user
+                admin_info = await q.get_bot().get_chat(ADMIN_ID)
+                admin_uname = f"@{admin_info.username}" if admin_info.username else "Admin"
+                await q.edit_message_text(
+                    f"{EM['phone']} <b>CONTACT ADMIN</b>\n\n"
+                    f"Admin se direct baat karo:\n{admin_uname}\n\n"
+                    f"<i>Apna User ID share karo: <code>{uid}</code></i>",
+                    parse_mode=H,
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("💬 Admin se baat karo", url=f"https://t.me/{admin_info.username}" if admin_info.username else f"tg://user?id={ADMIN_ID}")],
+                        [InlineKeyboardButton("🔙 Back", callback_data=f"c:home:{uid}")],
+                    ]))
+                # Notify admin
+                if admin_app_ref:
+                    try:
+                        await admin_app_ref.bot.send_message(
+                            ADMIN_ID,
+                            f"{EM['bell']} <b>Client Contact Request</b>\n\n"
+                            f"{EM['person']} User ID: <code>{uid}</code>\n"
+                            f"{EM['phone']} Account: <code>{udata.get('account_phone','—')}</code>\n"
+                            f"{EM['zap']} @{user.username or 'no_username'} | {user.full_name}",
+                            parse_mode=H)
+                    except Exception: pass
+            except Exception:
+                await q.edit_message_text(
+                    f"{EM['phone']} <b>Contact Admin</b>\n\nAdmin ka User ID: <code>{ADMIN_ID}</code>",
+                    parse_mode=H,
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data=f"c:home:{uid}")]]))
+
+    async def cl_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+        if not ctx.user_data: return
+        msg = update.message
+        if not msg or not msg.chat or msg.chat.type != "private": return
+        caller_id = update.effective_user.id if update.effective_user else 0
+        if not _is_allowed(caller_id): return
+        udata = get_user(uid)
+        if not is_active(udata) and not _is_admin(caller_id):
+            await msg.reply_text(f"{EM['warn']} Subscription expired. Admin se contact karo."); return
+
+        state = ctx.user_data.get("state")
+        sess  = get_vc_sess(uid)
+
+        if state == SC_PHONE:
+            phone = (msg.text or "").strip()
+            c = PyroClient(phone, api_id=APIID, api_hash=APIHASH, workdir=SESSION_DIR)
+            await c.connect()
+            try:
+                sent = await c.send_code(phone)
+                ctx.user_data.update({"tmp_phone": phone, "tmp_client": c,
+                                       "tmp_hash": sent.phone_code_hash, "state": SC_OTP})
+                await msg.reply_text(f"{EM['zap']} OTP bheja <code>{phone}</code> par!\n\nCode enter karo:", parse_mode=H)
+            except Exception as e:
+                await c.disconnect(); ctx.user_data.pop("state", None)
+                await msg.reply_text(f"{EM['cross']} Error: <code>{e}</code>", parse_mode=H)
+
+        elif state == SC_OTP:
+            c = ctx.user_data.get("tmp_client")
+            if not c: ctx.user_data.pop("state", None); return
+            try:
+                await c.sign_in(ctx.user_data["tmp_phone"], ctx.user_data["tmp_hash"], (msg.text or "").strip())
+                await cl_finalize_login(msg, ctx, c, uid, sess)
+            except Exception as e:
+                if any(k in str(e).lower() for k in ("2fa", "password", "session_password")):
+                    ctx.user_data["state"] = SC_PASS
+                    await msg.reply_text(f"{EM['lock']} <b>2FA Password</b> enter karo:", parse_mode=H)
+                else:
+                    await c.disconnect(); ctx.user_data.pop("state", None)
+                    await msg.reply_text(f"{EM['cross']} Login failed: <code>{e}</code>", parse_mode=H)
+
+        elif state == SC_PASS:
+            c = ctx.user_data.get("tmp_client")
+            if not c: ctx.user_data.pop("state", None); return
+            try:
+                await c.check_password((msg.text or "").strip())
+                await cl_finalize_login(msg, ctx, c, uid, sess)
+            except Exception as e:
+                await c.disconnect(); ctx.user_data.pop("state", None)
+                await msg.reply_text(f"{EM['cross']} Password error: <code>{e}</code>", parse_mode=H)
+
+        elif state == SC_CHANNEL:
+            link = (msg.text or "").strip()
+            if not link.startswith("https://t.me/"):
+                await msg.reply_text(f"{EM['cross']} <code>https://t.me/</code> se shuru karo.", parse_mode=H); return
+            udata = get_user(uid)
+            plan  = udata.get("plan", "basic")
+            limit = PLANS[plan]["channels"]
+            chs   = udata.setdefault("channels", [])
+            if len(chs) >= limit:
+                await msg.reply_text(
+                    f"{EM['lock']} <b>Channel limit reached!</b>\n"
+                    f"Aapke {PLANS[plan]['name']} plan mein sirf <b>{limit}</b> channel allowed hai.\n"
+                    f"Upgrade ke liye admin se contact karo.", parse_mode=H); return
+            if link not in chs:
+                chs.append(link); save_user(uid, udata)
+                if sess.pyro: start_monitors(sess, uid, [link])
+            ctx.user_data.pop("state", None)
+            await msg.reply_text(
+                f"{EM['check']} Channel added:\n<code>{link}</code>",
+                parse_mode=H, reply_markup=kb_cl_channels(uid))
+
+        elif state == SC_AUDIO:
+            doc = msg.document or msg.audio or msg.voice
+            udata = get_user(uid)
+            plan  = udata.get("plan", "basic")
+            limit = PLANS[plan]["audio"]
+            pl    = udata.get("playlist", [])
+            if limit and len(pl) >= limit:
+                await msg.reply_text(
+                    f"{EM['lock']} <b>Audio limit reached!</b>\n"
+                    f"Aapke {PLANS[plan]['name']} plan mein sirf <b>{limit}</b> audio allowed hai.", parse_mode=H); return
+            if doc:
+                fname = getattr(doc, "file_name", None) or f"audio_{int(time.time())}.mp3"
+                spath = os.path.join(AUDIO_DIR, f"{uid}_{fname}")
+                try:
+                    tf = await ctx.bot.get_file(doc.file_id)
+                    await tf.download_to_drive(spath)
+                    udata.setdefault("playlist", []).append({"path": spath, "name": fname})
+                    save_user(uid, udata)
+                    ctx.user_data.pop("state", None)
+                    await msg.reply_text(
+                        f"{EM['check']} Added: <code>{fname}</code>",
+                        parse_mode=H, reply_markup=kb_cl_playlist(uid))
+                except Exception as ex:
+                    await msg.reply_text(f"{EM['cross']} Upload failed: <code>{ex}</code>", parse_mode=H)
+            elif msg.text:
+                path = (msg.text or "").strip()
+                if not os.path.isfile(path):
+                    await msg.reply_text(f"{EM['cross']} File not found: <code>{path}</code>", parse_mode=H); return
+                name = os.path.basename(path)
+                udata.setdefault("playlist", []).append({"path": path, "name": name})
+                save_user(uid, udata)
+                ctx.user_data.pop("state", None)
+                await msg.reply_text(
+                    f"{EM['check']} Added: <code>{name}</code>",
+                    parse_mode=H, reply_markup=kb_cl_playlist(uid))
+
+        elif state == SC_DELAY:
+            try:
+                val = int((msg.text or "").strip())
+                udata = get_user(uid); udata["delay"] = val; save_user(uid, udata)
+                ctx.user_data.pop("state", None)
+                await msg.reply_text(f"{EM['check']} Delay: <b>{val}s</b>", parse_mode=H, reply_markup=kb_cl_playlist(uid))
+            except ValueError:
+                await msg.reply_text(f"{EM['cross']} Number bhejo.")
+
+        elif state == SC_BREAK:
+            try:
+                val = int((msg.text or "").strip())
+                udata = get_user(uid); udata["break_time"] = val; save_user(uid, udata)
+                ctx.user_data.pop("state", None)
+                await msg.reply_text(f"{EM['check']} Break: <b>{val}s</b>", parse_mode=H, reply_markup=kb_cl_playlist(uid))
+            except ValueError:
+                await msg.reply_text(f"{EM['cross']} Number bhejo.")
+
+    return cl_start, cl_callback, cl_message
+
+
+async def cl_finalize_login(msg, ctx, c: PyroClient, uid: str, sess: VCSession):
     me = await c.get_me()
     phone = c.me.phone_number if c.me else ctx.user_data.get("tmp_phone", "?")
     phone = f"+{phone}" if not str(phone).startswith("+") else phone
     for k in ("state", "tmp_client", "tmp_phone", "tmp_hash"): ctx.user_data.pop(k, None)
-    sess.pyro = c; sess.get_nt(); start_keepalive()
-    data = load_data(); data["phone"] = phone; save_data(data)
-    start_monitors(data.get("channels", []))
+    udata = get_user(uid); udata["account_phone"] = phone; save_user(uid, udata)
+    sess.pyro = c; sess.get_nt()
+    sess.keepalive_task = asyncio.create_task(keepalive_loop(sess))
+    start_monitors(sess, uid, udata.get("channels", []))
     name = me.first_name if me else phone
-    await msg.reply_text(f"✅ <b>Logged in as {name}</b>\n<code>{phone}</code>",
-                         parse_mode=H, reply_markup=kb_main())
+    await msg.reply_text(
+        f"{EM['check']} <b>Login ho gaya!</b>\n{name} — <code>{phone}</code>",
+        parse_mode=H, reply_markup=kb_cl_home(uid))
+
+
+# ─────────────────────────────────────────────────────────────
+# CLIENT BOT LAUNCH
+# ─────────────────────────────────────────────────────────────
+
+async def launch_client_bot(uid: str) -> bool:
+    udata = get_user(uid)
+    token = udata.get("bot_token")
+    if not token: return False
+    if uid in client_bots: return True
+    try:
+        app = ApplicationBuilder().token(token).build()
+        cl_start, cl_callback, cl_message = make_client_handlers(uid)
+        app.add_handler(CommandHandler("start", cl_start))
+        app.add_handler(CallbackQueryHandler(cl_callback))
+        app.add_handler(MessageHandler(filters.ChatType.PRIVATE & ~filters.COMMAND, cl_message))
+        await app.initialize()
+        await app.start()
+        await app.updater.start_polling(drop_pending_updates=True)
+        client_bots[uid] = app
+        # Cache bot info
+        try:
+            me = await app.bot.get_me()
+            bot_info_cache[uid] = {"username": me.username, "first_name": me.first_name}
+        except Exception: pass
+        # Auto-start Pyrogram
+        sess = get_vc_sess(uid)
+        await start_pyro_session(sess, uid)
+        log.info(f"[{uid}] Client bot launched: @{bot_info_cache.get(uid,{}).get('username','?')}")
+        return True
+    except Exception as e:
+        log.error(f"[{uid}] Launch failed: {e}")
+        return False
+
+
+# ─────────────────────────────────────────────────────────────
+# SUBSCRIPTION WATCHER & REMINDERS
+# ─────────────────────────────────────────────────────────────
+
+REMINDER_MSGS = [
+    "{warn} <b>Subscription Reminder!</b>\n\nAapki subscription <b>{days} din</b> mein expire hogi.\n{cal} Expiry: <b>{date}</b>\n\n{bell} Admin se renew karwao warna bot band ho jayega.",
+    "{fire} <b>Hey! Subscription expire hone wali hai!</b>\n\n{clock} Sirf <b>{days} din</b> bache hain!\n{cal} End Date: <b>{date}</b>\n\nAbhi renew karo {bell}",
+    "{warn} <b>Important Notice</b>\n\nAapka VC Bot subscription <b>{days} din</b> mein khatam ho raha hai.\n{cal} Date: <b>{date}</b>\n\nContact Admin for renewal.",
+]
+
+EXPIRY_MSGS = [
+    "{cross} <b>Subscription Expired</b>\n\nAapki subscription khatam ho gayi hai. Bot band ho gaya hai.\n\n{bell} Admin se contact karo renewal ke liye.",
+    "{warn} <b>Bot Stopped!</b>\n\nAapki subscription expire ho gayi. Bot band ho gaya.\n\nRenew karo {rocket}",
+]
+
+
+async def send_reminder(uid: str, days: int, until: float, app: Application):
+    tmpl = random.choice(REMINDER_MSGS)
+    text = tmpl.format(
+        warn=EM["warn"], fire=EM["fire"], clock=EM["clock"],
+        bell=EM["bell"], cal=EM["cal"], days=days, date=fmt_date(until))
+    try:
+        await app.bot.send_message(int(uid), text, parse_mode=H)
+        log.info(f"[{uid}] Reminder sent ({days} days left)")
+    except Exception as e:
+        log.warning(f"[{uid}] Reminder failed: {e}")
+
+
+async def sub_watcher():
+    while True:
+        await asyncio.sleep(random.randint(4800, 7200))  # 80-120 min random
+        data = load_data()
+        for uid, udata in data.get("users", {}).items():
+            dl    = days_left(udata)
+            until = udata.get("subscribed_until", 0)
+            app   = client_bots.get(uid)
+            reminders_sent = udata.get("reminders_sent", [])
+
+            # Expired — stop bot + notify
+            if not is_active(udata):
+                if uid in client_bots:
+                    # Send expiry message
+                    try:
+                        if app:
+                            text = random.choice(EXPIRY_MSGS).format(
+                                cross=EM["cross"], warn=EM["warn"], bell=EM["bell"], rocket=EM["rocket"])
+                            await app.bot.send_message(int(uid), text, parse_mode=H)
+                    except Exception: pass
+                    await stop_client_bot(uid)
+                    # Notify admin
+                    if admin_app_ref:
+                        try:
+                            info = bot_info_cache.get(uid, {})
+                            await admin_app_ref.bot.send_message(
+                                ADMIN_ID,
+                                f"{EM['warn']} <b>Client Expired & Stopped</b>\n\n"
+                                f"{EM['person']} ID: <code>{uid}</code>\n"
+                                f"{EM['bot']}  Bot: @{info.get('username','?')}",
+                                parse_mode=H)
+                        except Exception: pass
+                continue
+
+            # Expiring soon (1-3 days) — send random reminders
+            if 0 < dl <= 3:
+                day_key = str(dl)
+                # Random chance (60%) to send reminder if not already sent for this day
+                if day_key not in reminders_sent and random.random() < 0.60:
+                    if app:
+                        await send_reminder(uid, dl, until, app)
+                        udata["reminders_sent"] = reminders_sent + [day_key]
+                        save_user(uid, udata)
+                elif day_key in reminders_sent and random.random() < 0.30:
+                    # Even after sending, 30% chance for extra reminder
+                    if app:
+                        await send_reminder(uid, dl, until, app)
+
+
+# ─────────────────────────────────────────────────────────────
+# MAIN
+# ─────────────────────────────────────────────────────────────
 
 def _exc_handler(loop, context):
     exc = context.get("exception")
-    msg = str(exc) if exc else context.get("message", "")
-    if any(k in msg for k in ("Peer id invalid", "ID not found", "not modified")):
+    msg_str = str(exc) if exc else context.get("message", "")
+    if any(k in msg_str for k in ("Peer id invalid", "ID not found", "not modified", "Message is not modified")):
         return
     loop.default_exception_handler(context)
 
+
 async def main():
+    global admin_app_ref
     asyncio.get_event_loop().set_exception_handler(_exc_handler)
-    os.makedirs(SESSION_DIR, exist_ok=True)
-    os.makedirs(AUDIO_DIR,   exist_ok=True)
+
+    admin_app = ApplicationBuilder().token(ADMIN_TOKEN).build()
+    admin_app_ref = admin_app
+    admin_app.add_handler(CommandHandler("start", adm_start))
+    admin_app.add_handler(CallbackQueryHandler(adm_callback))
+    admin_app.add_handler(MessageHandler(filters.ChatType.PRIVATE & ~filters.COMMAND, adm_message))
+    await admin_app.initialize()
+    await admin_app.start()
+    await admin_app.updater.start_polling(drop_pending_updates=True)
+    log.info("Admin bot started")
+
     data = load_data()
-    phone = data.get("phone")
-    if phone:
-        await start_pyro_session(phone)
-    app = ApplicationBuilder().token(TOKEN).build()
-    app.add_handler(CommandHandler("start", cmd_start))
-    app.add_handler(CallbackQueryHandler(on_callback))
-    app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, on_message))
-    await app.initialize()
-    await app.start()
-    await app.updater.start_polling(drop_pending_updates=False)
-    log.info("Bot started.")
+    for uid, udata in data.get("users", {}).items():
+        if is_active(udata):
+            await launch_client_bot(uid)
+
+    asyncio.create_task(sub_watcher())
+    log.info("Platform fully running.")
+
     try:
         await asyncio.Event().wait()
     except (KeyboardInterrupt, asyncio.CancelledError):
         pass
     finally:
         log.info("Shutting down...")
-        await app.updater.stop()
-        await app.stop()
-        await app.shutdown()
+        for uid in list(client_bots.keys()):
+            await stop_client_bot(uid)
+        await admin_app.updater.stop()
+        await admin_app.stop()
+        await admin_app.shutdown()
+
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        pass
+    asyncio.run(main())
