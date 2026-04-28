@@ -1,13 +1,6 @@
-# Voice Chat Auto-Joiner Bot - Dependencies
-
-# Telegram Bot API
-python-telegram-bot>=20.0
-
-# Pyrogram - Telegram MTProto API Client
-pyrogram>=2.0.0
-
-# TgCrypto - Fast Telegram Crypto Library
-tgcrypto>=1.2.0
-
-# Requests - HTTP Library
-requests>=2.28.0
+python-telegram-bot==20.7
+pyrogram==2.0.106
+tgcrypto==1.2.5
+pydub==0.25.1
+ffmpeg-python==0.2.0
+py-tgcalls==5.1.1
