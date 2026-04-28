@@ -181,6 +181,32 @@ def save_user(uid: str, udata: dict):
     save_data(data)
 
 
+def generate_unique_key(owner_id: str) -> str:
+    """If owner already has a bot, generate owner_2, owner_3, etc."""
+    data = load_data()
+    users = data.get("users", {})
+    if owner_id not in users:
+        return owner_id
+    n = 2
+    while f"{owner_id}_{n}" in users:
+        n += 1
+    return f"{owner_id}_{n}"
+
+
+def get_owner_id(uid: str) -> str:
+    """Get actual Telegram user ID from storage key."""
+    udata = get_user(uid)
+    return str(udata.get("owner_id", uid.split("_")[0]))
+
+
+def get_client_display(uid: str) -> str:
+    """Returns 'Name (ID)' for a client, or just 'ID' if name not saved yet."""
+    udata = get_user(uid)
+    owner_id = udata.get("owner_id", uid.split("_")[0])
+    name = udata.get("client_name", "")
+    return f"<b>{name}</b> (<code>{owner_id}</code>)" if name else f"<code>{owner_id}</code>"
+
+
 def days_left(udata: dict) -> int:
     rem = udata.get("subscribed_until", 0) - time.time()
     return max(0, int(rem / 86400))
@@ -595,13 +621,15 @@ def kb_adm_allbots() -> InlineKeyboardMarkup:
     rows = []
     for uid, udata in users.items():
         info   = bot_info_cache.get(uid, {})
-        uname  = f"@{info['username']}" if info.get("username") else f"ID:{uid}"
-        fname  = info.get("first_name", f"User {uid}")
+        buname = f"@{info['username']}" if info.get("username") else f"bot:{uid}"
+        cname  = udata.get("client_name", "")
+        owner  = udata.get("owner_id", uid.split("_")[0])
+        label  = f"{cname} ({owner})" if cname else owner
         sess   = vc_sessions.get(uid)
         online = "🟢" if (sess and sess.pyro) else "🔴"
         running = bool(sess and sess.pyro)
         rows.append([
-            InlineKeyboardButton(f"{online} {fname} ({uname})", callback_data=f"adm:user:{uid}"),
+            InlineKeyboardButton(f"{online} {label} • {buname}", callback_data=f"adm:user:{uid}"),
         ])
         rows.append([
             InlineKeyboardButton("▶️ Start" if not running else "🛑 Stop",
@@ -624,12 +652,13 @@ def adm_subs_text() -> str:
         until  = udata.get("subscribed_until", 0)
         plan   = udata.get("plan", "basic")
         pl_inf = PLANS.get(plan, PLANS["basic"])
-        info   = bot_info_cache.get(uid, {})
-        name   = info.get("first_name", f"User {uid}")
+        cname  = udata.get("client_name", "")
+        owner  = udata.get("owner_id", uid.split("_")[0])
+        name   = f"{cname} ({owner})" if cname else owner
         icon   = EM["check"] if active else EM["cross"]
         warn   = f" {EM['bell']} <b>Expiring soon!</b>" if (0 < dl <= 3) else ""
         lines.append(
-            f"\n{icon} <b>{name}</b> <code>[{uid}]</code>{warn}\n"
+            f"\n{icon} <b>{name}</b>{warn}\n"
             f"   {pl_inf['emoji']} Plan: <b>{pl_inf['name']}</b>\n"
             f"   {EM['cal']} Expires: <b>{fmt_date(until) if until else '—'}</b> "
             f"({EM['clock']} <b>{dl} din</b>)"
@@ -660,8 +689,9 @@ def adm_user_detail_text(uid: str) -> str:
     udata = get_user(uid)
     sess  = vc_sessions.get(uid)
     info  = bot_info_cache.get(uid, {})
-    fname = info.get("first_name", f"User {uid}")
     uname = f"@{info['username']}" if info.get("username") else "—"
+    cname = udata.get("client_name", "")
+    fname = cname if cname else f"User {get_owner_id(uid)}"
     plan  = udata.get("plan", "basic")
     pl_inf = PLANS.get(plan, PLANS["basic"])
     active = is_active(udata)
@@ -681,10 +711,20 @@ def adm_user_detail_text(uid: str) -> str:
             f"   {'🟢' if (sess and uid in str(sess.monitor_tasks)) else '🔴'} <code>{c}</code>"
             for c in chs)
 
+    owner_id  = udata.get("owner_id", uid)
+    is_extra  = "_" in uid
+    name_id   = f"<b>{cname}</b> (<code>{owner_id}</code>)" if cname else f"<code>{owner_id}</code>"
+    uid_line  = (
+        f"{EM['person']} User     : {name_id}\n"
+        f"{EM['list']}  Bot Key  : <code>{uid}</code> 🔢\n"
+    ) if is_extra else (
+        f"{EM['person']} User     : {name_id}\n"
+    )
+
     return (
-        f"{EM['crown']} <b>{fname}</b> {uname}\n"
+        f"{EM['crown']} <b>{fname}</b> • {uname}\n"
         f"{'─'*28}\n"
-        f"{EM['person']} User ID  : <code>{uid}</code>\n"
+        f"{uid_line}"
         f"{EM['bot']}  Bot      : {bot_display_name(uid)}\n"
         f"{EM['phone']} Account  : <code>{phone}</code>\n"
         f"{EM['live']}  In VC    : {'🟢 ' + link if in_vc else '🔴 No'}\n"
@@ -744,52 +784,23 @@ def adm_stats_text() -> str:
 
 
 def welcome_message_for_client(uid: str, udata: dict) -> str:
-    info   = bot_info_cache.get(uid, {})
-    bname  = info.get("first_name", "VC Bot")
-    buname = f"@{info['username']}" if info.get("username") else "(bot link)"
-    plan   = udata.get("plan", "basic")
-    pl_inf = PLANS.get(plan, PLANS["basic"])
-    until  = udata.get("subscribed_until", 0)
-    added  = udata.get("added_on", time.time())
-
-    features = {
-        "basic": (
-            f"  {EM['check']} 1 Telegram Account login\n"
-            f"  {EM['check']} 1 Channel monitor\n"
-            f"  {EM['check']} 2 Audio files\n"
-            f"  {EM['check']} Auto Live Streaming\n"
-            f"  {EM['check']} Live Start/Stop Control"
-        ),
-        "pro": (
-            f"  {EM['check']} 1 Telegram Account login\n"
-            f"  {EM['check']} 3 Channels monitor\n"
-            f"  {EM['check']} Unlimited Audio files\n"
-            f"  {EM['check']} Auto Live Streaming\n"
-            f"  {EM['check']} Live Start/Stop Control\n"
-            f"  {EM['check']} Priority Support"
-        ),
-    }
+    plan     = udata.get("plan", "basic")
+    pl_inf   = PLANS.get(plan, PLANS["basic"])
+    until    = udata.get("subscribed_until", 0)
+    added    = udata.get("added_on", time.time())
+    owner_id = udata.get("owner_id", uid.split("_")[0])
+    cname    = udata.get("client_name", "")
+    name_line = f"<b>{cname}</b> (<code>{owner_id}</code>)" if cname else f"<code>{owner_id}</code>"
 
     return (
         f"{EM['fire']} <b>Welcome to VC Streaming!</b>\n"
         f"{'─'*30}\n\n"
-        f"{EM['bot']}  <b>Aapka Bot :</b> {buname}\n"
-        f"{EM['person']} <b>User ID   :</b> <code>{uid}</code>\n"
+        f"{EM['person']} <b>User      :</b> {name_line}\n"
         f"{pl_inf['emoji']} <b>Plan      :</b> <b>{pl_inf['name']}</b> ({pl_inf['price']})\n"
         f"{EM['cal']} <b>Start Date:</b> {fmt_date(added)}\n"
         f"{EM['cal']} <b>End Date  :</b> <b>{fmt_date(until)}</b>\n"
         f"{EM['clock']} <b>Duration  :</b> {days_left(udata)} din\n\n"
-        f"{EM['trophy']} <b>Aapke Plan mein kya hai:</b>\n"
-        f"{features.get(plan, features['basic'])}\n\n"
         f"{'─'*30}\n"
-        f"{EM['rocket']} <b>Kaise Shuru Karein:</b>\n"
-        f"  1{EM['zap']} {buname} pe /start karo\n"
-        f"  2{EM['zap']} Account {EM['arrow'] if False else '→'} Login (phone + OTP)\n"
-        f"  3{EM['zap']} Channel add karo\n"
-        f"  4{EM['zap']} Audio upload karo\n"
-        f"  5{EM['zap']} Live aane par auto stream shuru!\n\n"
-        f"{'─'*30}\n"
-        f"{EM['bell']} <b>Subscription end hone se 3 din pehle reminder milega.</b>\n\n"
         f"{EM['shield']} <i>Koi problem? Bot mein Contact Admin button se reach karo.</i>"
     )
 
@@ -870,7 +881,7 @@ async def adm_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         udata = get_user(uid)
         await q.edit_message_text(
             f"{EM['gift']} <b>EXTEND SUBSCRIPTION</b>\n{'─'*25}\n\n"
-            f"{EM['person']} Client: <code>{uid}</code>\n"
+            f"{EM['person']} Client: {get_client_display(uid)}\n"
             f"{EM['clock']} Current: <b>{days_left(udata)} din bache</b>\n"
             f"{EM['cal']} Expires: <b>{fmt_date(udata.get('subscribed_until',0))}</b>\n\n"
             f"Kitne <b>din aur</b> add karne hain?",
@@ -1191,13 +1202,16 @@ async def adm_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"{EM['crown']} <b>ADD NEW CLIENT</b>\n{'─'*25}\n\n"
             f"{EM['settings']} <b>Step 4 of 4</b>\n\n"
             f"{pl_inf['emoji']} Plan: <b>{pl_inf['name']}</b> — {pl_inf['desc']}\n\n"
-            f"{EM['cal']} <b>Kitne din</b> ka subscription dena hai?\n"
-            f"<i>Example: 30</i>",
+            f"{EM['cal']} <b>Kitne din</b> ka subscription dena hai?\n\n"
+            f"{EM['zap']} Quick select:\n"
+            f"<i>Ya koi bhi custom number type karo — jaise <b>45</b>, <b>120</b>, <b>365</b></i>",
             parse_mode=H,
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("30 Din",  callback_data=f"adm:quickdays:30"),
                  InlineKeyboardButton("60 Din",  callback_data=f"adm:quickdays:60"),
                  InlineKeyboardButton("90 Din",  callback_data=f"adm:quickdays:90")],
+                [InlineKeyboardButton("180 Din", callback_data=f"adm:quickdays:180"),
+                 InlineKeyboardButton("365 Din", callback_data=f"adm:quickdays:365")],
                 [InlineKeyboardButton("❌ Cancel", callback_data="adm:home")],
             ]))
 
@@ -1207,12 +1221,16 @@ async def adm_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def finalize_add_user(q_or_msg, ctx, days: int):
-    uid  = ctx.user_data.get("new_uid")
-    tok  = ctx.user_data.get("new_token")
-    plan = ctx.user_data.get("new_plan", "basic")
-    if not uid or not tok: ctx.user_data.clear(); return
+    owner_id = ctx.user_data.get("new_uid")
+    tok      = ctx.user_data.get("new_token")
+    plan     = ctx.user_data.get("new_plan", "basic")
+    if not owner_id or not tok: ctx.user_data.clear(); return
+
+    # Generate unique storage key (allows multiple bots per owner)
+    uid   = generate_unique_key(owner_id)
     until = time.time() + (days * 86400)
     udata = {
+        "owner_id": owner_id,          # actual Telegram user ID
         "bot_token": tok, "plan": plan,
         "subscribed_until": until, "added_on": time.time(),
         "account_phone": None, "channels": [],
@@ -1226,13 +1244,15 @@ async def finalize_add_user(q_or_msg, ctx, days: int):
     await edit_fn(f"{EM['rocket']} Bot shuru ho raha hai...", parse_mode=H)
     ok = await launch_client_bot(uid)
 
-    info = bot_info_cache.get(uid, {})
     welcome = welcome_message_for_client(uid, get_user(uid))
     pl_inf  = PLANS.get(plan, PLANS["basic"])
+    is_extra = "_" in uid  # 2nd, 3rd bot for same owner
+    extra_note = f"\n{EM['star']} <b>Bot #{uid.split('_')[-1]}</b> for this client" if is_extra else ""
 
     await edit_fn(
         f"{EM['check']} <b>CLIENT ADDED SUCCESSFULLY!</b>\n{'─'*30}\n\n"
-        f"{EM['person']} User ID  : <code>{uid}</code>\n"
+        f"{EM['person']} Owner ID : <code>{owner_id}</code>\n"
+        f"{EM['list']}  Bot Key  : <code>{uid}</code>{extra_note}\n"
         f"{EM['bot']}  Bot      : {bot_display_name(uid)}\n"
         f"{pl_inf['emoji']} Plan     : <b>{pl_inf['name']}</b>\n"
         f"{EM['cal']} Expires  : <b>{fmt_date(until)}</b> ({days} din)\n"
@@ -1258,13 +1278,25 @@ async def adm_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     if state == SA_USERID:
         try:
-            uid = str(int((msg.text or "").strip()))
-            ctx.user_data["new_uid"] = uid
+            owner_id = str(int((msg.text or "").strip()))
+            # Count existing bots for this owner
+            data = load_data()
+            existing = [k for k, v in data["users"].items()
+                        if str(v.get("owner_id", k.split("_")[0])) == owner_id]
+            existing_txt = ""
+            if existing:
+                existing_txt = (
+                    f"\n\n{EM['bell']} Is user ke already <b>{len(existing)}</b> bot(s) hain:\n"
+                    + "\n".join(f"  {EM['green']} <code>{k}</code> — {bot_info_cache.get(k,{}).get('username','?')}" for k in existing)
+                    + f"\n\n{EM['zap']} Naya bot add ho jayega as: <code>{generate_unique_key(owner_id)}</code>"
+                )
+            ctx.user_data["new_uid"] = owner_id
             ctx.user_data["state"] = SA_TOKEN
             await msg.reply_text(
                 f"{EM['crown']} <b>ADD NEW CLIENT</b>\n{'─'*25}\n\n"
                 f"{EM['settings']} <b>Step 2 of 4</b>\n\n"
-                f"{EM['person']} User ID: <code>{uid}</code> {EM['check']}\n\n"
+                f"{EM['person']} User ID: <code>{owner_id}</code> {EM['check']}"
+                f"{existing_txt}\n\n"
                 f"{EM['bot']}  Client ka <b>Bot Token</b> bhejo:\n"
                 f"<i>(@BotFather se mila token)</i>",
                 parse_mode=H)
@@ -1506,10 +1538,12 @@ def kb_cl_live(uid: str) -> InlineKeyboardMarkup:
 def make_client_handlers(uid: str):
 
     def _is_allowed(user_id: int) -> bool:
-        return str(user_id) == uid or user_id == ADMIN_ID
+        owner = get_owner_id(uid)   # actual Telegram user ID (supports multi-bot)
+        return str(user_id) == owner or user_id == ADMIN_ID
 
     def _is_admin(user_id: int) -> bool:
-        return user_id == ADMIN_ID and str(user_id) != uid
+        owner = get_owner_id(uid)
+        return user_id == ADMIN_ID and str(user_id) != owner
 
     def _cl_home_text_for(requester_id: int) -> str:
         base = cl_home_text(uid)
@@ -1539,6 +1573,12 @@ def make_client_handlers(uid: str):
         user = update.effective_user
         if not user or not _is_allowed(user.id): return
         udata = get_user(uid)
+        # Save client's Telegram name whenever they /start
+        if not _is_admin(user.id):
+            cname = " ".join(filter(None, [user.first_name, user.last_name]))
+            if cname and udata.get("client_name") != cname:
+                udata["client_name"] = cname
+                save_user(uid, udata)
         if not is_active(udata) and not _is_admin(user.id):
             await update.message.reply_text(
                 f"{EM['warn']} <b>SUBSCRIPTION EXPIRED</b>\n\n"
