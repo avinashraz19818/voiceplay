@@ -1,0 +1,174 @@
+{
+  "users": {
+    "6444599625": {
+      "owner_id": "6444599625",
+      "bot_token": "8741205227:AAH00Aa4DF3mrPgJtC-cTO-NscANbTsAaA0",
+      "plan": "basic",
+      "subscribed_until": 1779627087.5303426,
+      "added_on": 1778935887.53035,
+      "account_phone": "+16625399218",
+      "channels": [
+        "https://t.me/+VasrzM1i2TQzYmFl"
+      ],
+      "playlist": [
+        {
+          "path": "audio_files/6444599625_audio_1779264936.mp3",
+          "name": "audio_1779264936.mp3"
+        }
+      ],
+      "delay": 30,
+      "break_time": 60,
+      "reminders_sent": [
+        "3",
+        "2",
+        "1"
+      ]
+    },
+    "6444599625_2": {
+      "owner_id": "6444599625",
+      "bot_token": "8751720990:AAEcTSbc2Fouuv48UIJtq6PzhcLB7PYiqoc",
+      "plan": "basic",
+      "subscribed_until": 1779799960.8198638,
+      "added_on": 1778935960.819865,
+      "account_phone": "+918806422434",
+      "channels": [
+        "https://t.me/+5wYXdZfacPwwZTZl"
+      ],
+      "playlist": [
+        {
+          "path": "audio_files/6444599625_2_audio_1779243869.mp3",
+          "name": "audio_1779243869.mp3"
+        }
+      ],
+      "delay": 30,
+      "break_time": 60,
+      "reminders_sent": [
+        "3"
+      ]
+    },
+    "6444599625_3": {
+      "owner_id": "6444599625",
+      "bot_token": "8646421125:AAFj9uPJ8SdsXUsOS7hvr7rVjxcCD7B0ubc",
+      "plan": "basic",
+      "subscribed_until": 1779886429.3075752,
+      "added_on": 1778936029.307586,
+      "account_phone": "+16624828164",
+      "channels": [
+        "https://t.me/+hnGoxIQ1wj83NGVl"
+      ],
+      "playlist": [
+        {
+          "path": "audio_files/6444599625_3_audio_1779195199.mp3",
+          "name": "audio_1779195199.mp3"
+        }
+      ],
+      "delay": 30,
+      "break_time": 60,
+      "reminders_sent": []
+    },
+    "6451644278": {
+      "owner_id": "6451644278",
+      "bot_token": "8685277544:AAF3gTWzrkfghsebyKyS4uVs9Dn1Zj2In5M",
+      "plan": "basic",
+      "subscribed_until": 1780145712.2887177,
+      "added_on": 1778936112.2887237,
+      "account_phone": "+19312837172",
+      "channels": [
+        "https://t.me/+NYnorF2xfkhiYmI1"
+      ],
+      "playlist": [
+        {
+          "path": "audio_files/6451644278_audio_1779250484.mp3",
+          "name": "audio_1779250484.mp3"
+        }
+      ],
+      "delay": 30,
+      "break_time": 300,
+      "reminders_sent": [],
+      "client_name": "S A M"
+    },
+    "6444599625_4": {
+      "owner_id": "6444599625",
+      "bot_token": "8790545186:AAHWcfeCyHfelEVuEHhSvNZuPx_jTMbUr4Q",
+      "plan": "basic",
+      "subscribed_until": 1780491446.1341486,
+      "added_on": 1778936246.1341603,
+      "account_phone": "+918572900010",
+      "channels": [
+        "https://t.me/+Z6J56TI-fZFlZTQ1"
+      ],
+      "playlist": [
+        {
+          "path": "audio_files/6444599625_4_audio_1779194169.mp3",
+          "name": "audio_1779194169.mp3"
+        }
+      ],
+      "delay": 10,
+      "break_time": 60,
+      "reminders_sent": [],
+      "client_name": "\ud835\udc18\ud835\udc13 \ud835\udc01\ud835\udc07\ud835\udc00\ud835\udc08"
+    },
+    "7535601861": {
+      "owner_id": "7535601861",
+      "bot_token": "8657357906:AAFyzmARLuqstp_cC1YGSYA-GnZwaSfVWS0",
+      "plan": "basic",
+      "subscribed_until": 1780491531.212592,
+      "added_on": 1778936331.212603,
+      "account_phone": "919263893001",
+      "channels": [
+        "https://t.me/+akHf5OY8eHYxZTQ1"
+      ],
+      "playlist": [
+        {
+          "path": "audio_files/7535601861_AUD-20260426-WA0039.m4a",
+          "name": "AUD-20260426-WA0039.m4a"
+        }
+      ],
+      "delay": 30,
+      "break_time": 300,
+      "reminders_sent": []
+    },
+    "7535601861_2": {
+      "owner_id": "7535601861",
+      "bot_token": "8338457829:AAE_U4REuCFGbIr1O3SxcAe3WVeJA2dcQeY",
+      "plan": "basic",
+      "subscribed_until": 1780577986.3705592,
+      "added_on": 1778936386.3705602,
+      "account_phone": "919437343958",
+      "channels": [
+        "https://t.me/+akHf5OY8eHYxZTQ1"
+      ],
+      "playlist": [
+        {
+          "path": "audio_files/7535601861_2_AUD-20260520-WA0000.m4a",
+          "name": "AUD-20260520-WA0000.m4a"
+        }
+      ],
+      "delay": 2,
+      "break_time": 1,
+      "reminders_sent": [],
+      "client_name": "Sahil Rana"
+    },
+    "8015937475": {
+      "owner_id": "8015937475",
+      "bot_token": "8443804887:AAFwyflk8ZW4q4tE8J1OAa-ZwMRRfyFY7H0",
+      "plan": "pro",
+      "subscribed_until": 1810657950.4217587,
+      "added_on": 1779121950.4217606,
+      "account_phone": "+19016941376",
+      "channels": [
+        "https://t.me/+F4IAa6kyKnQ4NjI1"
+      ],
+      "playlist": [
+        {
+          "path": "audio_files/8015937475_audio_1779244457.mp3",
+          "name": "audio_1779244457.mp3"
+        }
+      ],
+      "delay": 5,
+      "break_time": 5,
+      "reminders_sent": [],
+      "client_name": "\ud835\udead\ud835\udea8\ud835\udebc\ud835\udeaa\ud835\udeaf \u3164\u3164\u3164\u3164\u3164"
+    }
+  }
+}
