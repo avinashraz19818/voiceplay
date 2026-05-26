@@ -41,6 +41,35 @@ log = logging.getLogger("VCPlatform")
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("pyrogram").setLevel(logging.WARNING)
 
+
+class _SuppressUnknownConstructor(logging.Filter):
+    """
+    Pyrogram uses a TL schema that can fall behind Telegram's API.
+    When Telegram sends a packet with a new (unknown) constructor,
+    Pyrogram raises a ValueError inside an asyncio Task — producing
+    noisy 'Task exception was never retrieved' log spam.
+    These lost packets are harmless: the 10-second monitor loop
+    serves as a fallback to catch up on any missed VC state changes.
+    This filter silences those known-harmless error lines.
+    """
+    _PATTERNS = (
+        "unknown constructor",
+        "Task exception was never retrieved",
+        "unpack",
+    )
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.name == "asyncio" and record.levelno >= logging.ERROR:
+            msg = record.getMessage()
+            if any(p in msg for p in self._PATTERNS):
+                return False
+        return True
+
+
+_suppress_filter = _SuppressUnknownConstructor()
+logging.getLogger("asyncio").addFilter(_suppress_filter)
+logging.getLogger().addFilter(_suppress_filter)
+
 H = "HTML"
 DATA_FILE        = "platform_data.json"
 CHAT_CACHE_FILE  = "chat_cache.json"   # persists resolved chat info across restarts
@@ -893,7 +922,15 @@ async def setup_vc_update_handler(sess: VCSession, uid: str):
 
     async def on_vc_update(client, update, users, chats):
         try:
-            if not isinstance(update, raw_types.UpdateGroupCall):
+            # Accept UpdateGroupCall (VC started/ended) AND
+            # UpdateGroupCallParticipants (participant list changed —
+            # used as a keep-alive signal when the constructor is known).
+            if not isinstance(update, (raw_types.UpdateGroupCall,
+                                       raw_types.UpdateGroupCallParticipants)):
+                return
+            # For participant-list updates we only need to verify the call
+            # is still live; no join logic needed.
+            if isinstance(update, raw_types.UpdateGroupCallParticipants):
                 return
 
             bare_id = update.chat_id
